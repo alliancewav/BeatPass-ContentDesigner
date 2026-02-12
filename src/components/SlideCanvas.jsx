@@ -13,7 +13,7 @@ const L = {
   progressBot: 52,   // progress line from bottom edge
 };
 
-export default function SlideCanvas({ slide, index, totalSlides, theme, aspectRatio, imageCache, isExport = false, overlayOnly = false }) {
+export default function SlideCanvas({ slide, index, totalSlides, theme, aspectRatio, imageCache, isExport = false, overlayOnly = false, coverYouTubeId = null, coverMediaMode = 'thumbnail' }) {
   if (!slide) return null;
 
   const isPortrait = aspectRatio === 'portrait';
@@ -32,8 +32,8 @@ export default function SlideCanvas({ slide, index, totalSlides, theme, aspectRa
 
   // Logo: respect the theme's preferred variant. Cover/CTA slides overlay the bg
   // color over the image, so the logo must match the theme, not the image.
-  const isDarkTheme = theme.logoVariant === 'light'; // 'light' logo = dark bg theme
-  const useWhiteLogo = isDarkTheme;
+  const usesDarkBackground = theme.logoVariant === 'light'; // 'light' logo = dark bg theme
+  const useWhiteLogo = usesDarkBackground;
   const logoSrc = useWhiteLogo ? imageCache.logoWhite : imageCache.logoBlack;
   const headingFont = "'JetBrains Mono', 'Geist', monospace";
   const bodyFont = "'Roboto', 'Geist', system-ui, -apple-system, sans-serif";
@@ -123,8 +123,8 @@ export default function SlideCanvas({ slide, index, totalSlides, theme, aspectRa
           <img src={logoSrc} alt="" style={{ height: 42, width: 'auto', objectFit: 'contain' }} />
         </div>
         <div style={{
-          backgroundColor: isDarkTheme ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.7)',
-          color: isDarkTheme ? '#FFF' : '#0F0F0F',
+          backgroundColor: usesDarkBackground ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.7)',
+          color: usesDarkBackground ? '#FFF' : '#0F0F0F',
           borderRadius: 9999, padding: '12px 24px',
           display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
           whiteSpace: 'nowrap', flexShrink: 0,
@@ -141,11 +141,31 @@ export default function SlideCanvas({ slide, index, totalSlides, theme, aspectRa
         <>
           {imageCache.cover && !overlayOnly && (
             <div style={{ position: 'absolute', inset: 0, zIndex: 0 }}>
-              <img src={imageCache.cover} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+              {/* YouTube video autoplay mode on cover */}
+              {coverYouTubeId && coverMediaMode === 'video' && !isExport ? (
+                <>
+                  <img src={imageCache.cover} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+                  <iframe
+                    src={`https://www.youtube.com/embed/${coverYouTubeId}?autoplay=1&mute=1&loop=1&playlist=${coverYouTubeId}&controls=0&modestbranding=1&rel=0&iv_load_policy=3&showinfo=0&playsinline=1&disablekb=1&fs=0&enablejsapi=1&origin=${encodeURIComponent(window.location.origin)}`}
+                    style={{
+                      position: 'absolute', top: '50%', left: '50%',
+                      width: Math.max(W, H * (16 / 9)) + 200,
+                      height: Math.max(H, W * (9 / 16)) + 200,
+                      transform: 'translate(-50%, -50%)',
+                      border: 'none', pointerEvents: 'none', zIndex: 1,
+                    }}
+                    allow="autoplay; encrypted-media; accelerometer; gyroscope"
+                    referrerPolicy="no-referrer-when-downgrade"
+                    loading="lazy"
+                  />
+                </>
+              ) : (
+                <img src={imageCache.cover} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+              )}
               {/* Overlay: light themes need heavier coverage so dark images don't clash */}
               <div style={{
-                position: 'absolute', inset: 0,
-                background: isDarkTheme
+                position: 'absolute', inset: 0, zIndex: 2,
+                background: usesDarkBackground
                   ? (theme.overlayGradient ? theme.overlayGradient(theme.bg) : `linear-gradient(to top, ${theme.bg} 15%, ${theme.bg}E6 45%, transparent 100%)`)
                   : `linear-gradient(to top, ${theme.bg} 30%, ${theme.bg}F2 55%, ${theme.bg}CC 75%, ${theme.bg}99 100%)`,
               }} />
@@ -162,7 +182,7 @@ export default function SlideCanvas({ slide, index, totalSlides, theme, aspectRa
               fontSize: getCoverTitleFontSize((slide.title || '').length, isPortrait),
               fontWeight: 800, lineHeight: 1.05,
               margin: 0, marginBottom: slide.beatCover ? 16 : 28,
-              textShadow: isDarkTheme ? '0 4px 24px rgba(0,0,0,0.3)' : '0 2px 12px rgba(255,255,255,0.5)',
+              textShadow: usesDarkBackground ? '0 4px 24px rgba(0,0,0,0.3)' : '0 2px 12px rgba(255,255,255,0.5)',
             }}>
               {slide.title}
             </h1>
@@ -344,7 +364,7 @@ export default function SlideCanvas({ slide, index, totalSlides, theme, aspectRa
 
       {/* ── Content Slide — TEXT (no background image) ── */}
       {slide.type === 'content' && !isImageSlide && !slide.playerLayout &&
-        renderContentBody({ slide, isPortrait, hasVideoEmbed, L, theme, headingFont, getContentFontSizePx })
+        renderContentBody({ slide, isPortrait, hasVideoEmbed, L, theme, headingFont })
       }
 
       {/* ── Content Slide — IMAGE (full-bleed with text overlay) ── */}
@@ -386,10 +406,31 @@ export default function SlideCanvas({ slide, index, totalSlides, theme, aspectRa
         <div style={{ position: 'relative', zIndex: 10, flex: 1, display: 'flex', flexDirection: 'column', height: '100%' }}>
           {imageCache.cover && (
             <div style={{ position: 'absolute', inset: 0, zIndex: 0 }}>
-              <img src={imageCache.cover} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', opacity: isDarkTheme ? 0.25 : 0.12, filter: 'blur(6px)', display: 'block' }} />
+              {/* YouTube video autoplay mode on CTA */}
+              {coverYouTubeId && coverMediaMode === 'video' && !isExport ? (
+                <>
+                  <img src={imageCache.cover} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', opacity: usesDarkBackground ? 0.25 : 0.12, filter: 'blur(6px)', display: 'block' }} />
+                  <iframe
+                    src={`https://www.youtube.com/embed/${coverYouTubeId}?autoplay=1&mute=1&loop=1&playlist=${coverYouTubeId}&controls=0&modestbranding=1&rel=0&iv_load_policy=3&showinfo=0&playsinline=1&disablekb=1&fs=0&enablejsapi=1&origin=${encodeURIComponent(window.location.origin)}`}
+                    style={{
+                      position: 'absolute', top: '50%', left: '50%',
+                      width: Math.max(W, H * (16 / 9)) + 200,
+                      height: Math.max(H, W * (9 / 16)) + 200,
+                      transform: 'translate(-50%, -50%)',
+                      border: 'none', pointerEvents: 'none', zIndex: 1,
+                      opacity: usesDarkBackground ? 0.25 : 0.12, filter: 'blur(6px)',
+                    }}
+                    allow="autoplay; encrypted-media; accelerometer; gyroscope"
+                    referrerPolicy="no-referrer-when-downgrade"
+                    loading="lazy"
+                  />
+                </>
+              ) : (
+                <img src={imageCache.cover} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', opacity: usesDarkBackground ? 0.25 : 0.12, filter: 'blur(6px)', display: 'block' }} />
+              )}
               <div style={{
-                position: 'absolute', inset: 0,
-                background: isDarkTheme
+                position: 'absolute', inset: 0, zIndex: 2,
+                background: usesDarkBackground
                   ? `radial-gradient(ellipse at center, ${theme.bg}CC 0%, ${theme.bg} 70%)`
                   : `radial-gradient(ellipse at center, ${theme.bg}E6 0%, ${theme.bg} 60%)`,
               }} />
@@ -444,7 +485,7 @@ export default function SlideCanvas({ slide, index, totalSlides, theme, aspectRa
       <div style={{
         position: 'absolute', bottom: L.progressBot, left: L.side, right: L.side,
         height: L.progressH, borderRadius: 9999, zIndex: 30,
-        backgroundColor: isDarkTheme ? 'rgba(255,255,255,0.15)' : `${theme.text}18`,
+        backgroundColor: usesDarkBackground ? 'rgba(255,255,255,0.15)' : `${theme.text}18`,
         overflow: 'hidden',
       }}>
         <div style={{
@@ -458,7 +499,7 @@ export default function SlideCanvas({ slide, index, totalSlides, theme, aspectRa
 }
 
 // ── Content body renderer (extracted from inline IIFE for readability) ──
-function renderContentBody({ slide, isPortrait, hasVideoEmbed, L, theme, headingFont, getContentFontSizePx }) {
+function renderContentBody({ slide, isPortrait, hasVideoEmbed, L, theme, headingFont }) {
   const contentLen = (slide.content || '').length;
   const bulletCount = (slide.bullets || []).length;
   const hasBoth = contentLen > 0 && bulletCount > 0;

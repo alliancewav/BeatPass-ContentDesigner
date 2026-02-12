@@ -4,8 +4,10 @@ import SlideCanvas from './SlideCanvas';
 export default function ThumbnailStrip({ slides, currentIndex, onSelect, theme, aspectRatio, imageCache }) {
   const containerRef = useRef(null);
   const isPortrait = aspectRatio === 'portrait';
-  const thumbW = 80;
-  const thumbH = isPortrait ? 100 : 80;
+  // Responsive thumbnail sizes — smaller on mobile
+  const isMobile = typeof window !== 'undefined' && window.innerWidth < 640;
+  const thumbW = isMobile ? 56 : 80;
+  const thumbH = isPortrait ? (isMobile ? 70 : 100) : (isMobile ? 56 : 80);
   const slideW = 1080;
   const slideH = isPortrait ? 1350 : 1080;
   const thumbScale = thumbW / slideW;

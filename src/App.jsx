@@ -11,6 +11,19 @@ import {
   Package,
   ChevronDown,
   Film,
+  ImagePlus,
+  Upload,
+  RotateCw,
+  MessageSquare,
+  Twitter,
+  BookOpen,
+  Layers,
+  Undo2,
+  Redo2,
+  Video,
+  ImageIcon,
+  Menu,
+  X,
 } from 'lucide-react';
 
 import PasswordGate from './components/PasswordGate';
@@ -18,6 +31,7 @@ import ArticleFetcher from './components/ArticleFetcher';
 import SlideCanvas from './components/SlideCanvas';
 import ThemePicker from './components/ThemePicker';
 import ThumbnailStrip from './components/ThumbnailStrip';
+import StoryCanvas from './components/StoryCanvas';
 
 import THEMES from './lib/themes';
 import { getDominantColor, wcagTextColor, ensureContrast, darkenColor, lightenColor, hslToHex, rgbToHsl } from './lib/utils';
@@ -25,6 +39,9 @@ import { downloadAllAsZip, downloadAllIndividual, captureElement, captureOverlay
 import { exportSlideAsVideo, getVideoExtension, exportYouTubeVideo } from './lib/videoExport';
 import { fetchSettings } from './lib/ghostApi';
 import { createBlankSlide, normaliseYouTubeUrl } from './lib/slideGenerator';
+import { generateStories, createBlankStory } from './lib/storyGenerator';
+import { generateCaption } from './lib/captionGenerator';
+import { generateTweet, generateThread } from './lib/tweetGenerator';
 import CONFIG from './config';
 
 export default function App() {
@@ -40,6 +57,39 @@ export default function App() {
   const [activeThemeId, setActiveThemeId] = useState('aspectDark');
   const [dynamicTheme, setDynamicTheme] = useState(null);
   const [aspectRatio, setAspectRatio] = useState('portrait');
+
+  // Cover image override (hero image swap)
+  const [coverOverride, setCoverOverride] = useState(null);
+  const [coverYouTubeId, setCoverYouTubeId] = useState(null);
+  const [coverMediaMode, setCoverMediaMode] = useState('thumbnail'); // 'thumbnail' | 'video'
+  const [coverInputUrl, setCoverInputUrl] = useState(''); // raw URL user typed
+  const coverBlobRef = useRef(null);
+
+  // Story frames state
+  const [storyFrames, setStoryFrames] = useState([]);
+  const [currentStoryIndex, setCurrentStoryIndex] = useState(0);
+  const [editorTab, setEditorTab] = useState('slides'); // 'slides' | 'stories' | 'caption' | 'twitter'
+
+  // Caption & Tweet state
+  const [caption, setCaption] = useState({ hook: '', body: '', cta: '', hashtags: '' });
+  const [tweetMode, setTweetMode] = useState('single'); // 'single' | 'thread'
+  const [tweets, setTweets] = useState([]);
+  const [threadTweets, setThreadTweets] = useState([]);
+  const [toastMsg, setToastMsg] = useState(null);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+
+  // Undo/Redo history
+  const historyRef = useRef([]);
+  const historyIndexRef = useRef(-1);
+  const pushHistory = useCallback((slidesSnapshot) => {
+    const h = historyRef.current;
+    const idx = historyIndexRef.current;
+    // Trim any future states if we branched
+    historyRef.current = h.slice(0, idx + 1);
+    historyRef.current.push(JSON.parse(JSON.stringify(slidesSnapshot)));
+    if (historyRef.current.length > 20) historyRef.current.shift();
+    historyIndexRef.current = historyRef.current.length - 1;
+  }, []);
 
   // Export state
   const [exporting, setExporting] = useState(false);
@@ -100,16 +150,17 @@ export default function App() {
   };
 
   // ── Memoize the resolved color-source image so effects only fire when the URL changes ──
+  const slideVideoUrls = useMemo(() => slides.map(s => s.videoUrl).join(','), [slides]);
   const resolvedColorImage = useMemo(
-    () => resolveColorImage(article, slides),
-    [article?.featureImage, article?.html, article?.tags, slides.map(s => s.videoUrl).join(',')]
+    () => coverOverride || resolveColorImage(article, slides),
+    [coverOverride, article?.featureImage, article?.html, article?.tags, slideVideoUrls]
   );
 
-  // ── Update cover image when article changes ──
+  // ── Update cover image when article or override changes ──
   useEffect(() => {
-    const img = article?.featureImage || resolvedColorImage;
+    const img = coverOverride || article?.featureImage || resolvedColorImage;
     if (img) setImageCache((prev) => ({ ...prev, cover: img }));
-  }, [article?.featureImage, resolvedColorImage]);
+  }, [coverOverride, article?.featureImage, resolvedColorImage]);
 
   // ── WCAG-compliant dynamic theme from feature/video image ──
   // Uses HSL-based approach: extracts hue from dominant color, then builds
@@ -159,27 +210,68 @@ export default function App() {
   }, [resolvedColorImage]);
 
   // ── Responsive scale ──
+  const isStoryView = editorTab === 'stories';
+  const previewW = 1080;
+  const previewH = isStoryView ? 1920 : (aspectRatio === 'portrait' ? 1350 : 1080);
+
   useLayoutEffect(() => {
     const handleResize = () => {
       if (!previewContainerRef.current) return;
       const { width, height } = previewContainerRef.current.getBoundingClientRect();
-      const slideW = 1080;
-      const slideH = aspectRatio === 'portrait' ? 1350 : 1080;
-      const pad = 80;
-      const scaleX = Math.max(0, width - pad) / slideW;
-      const scaleY = Math.max(0, height - pad) / slideH;
+      const isMobile = width < 640;
+      const pad = isMobile ? 24 : 80;
+      const scaleX = Math.max(0, width - pad) / previewW;
+      const scaleY = Math.max(0, height - pad) / previewH;
       setScale(Math.min(scaleX, scaleY, 0.5));
     };
     handleResize();
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
-  }, [mode, aspectRatio]);
+  }, [mode, aspectRatio, editorTab, previewH]);
 
   // ── Handlers ──
   const handleSlidesGenerated = useCallback((newSlides, newArticle) => {
     setSlides(newSlides);
     setArticle(newArticle);
     setCurrentIndex(0);
+    setCoverOverride(null);
+    setCoverYouTubeId(null);
+    setCoverMediaMode('thumbnail');
+    setCoverInputUrl('');
+    setEditorTab('slides');
+    // Generate companion content
+    setStoryFrames(generateStories(newArticle, newSlides));
+    setCurrentStoryIndex(0);
+    const cap = generateCaption(newArticle, newSlides);
+    setCaption(cap);
+    const singleTweets = generateTweet(newArticle);
+    const thread = generateThread(newArticle, newSlides);
+    setTweets(singleTweets);
+    setThreadTweets(thread);
+    setTweetMode('single');
+    setMode('editor');
+  }, []);
+
+  // Start blank mode (no article)
+  const handleStartBlank = useCallback(() => {
+    const blankSlides = [
+      createBlankSlide('cover', 0),
+      createBlankSlide('content', 1),
+      createBlankSlide('cta', 0),
+    ];
+    setSlides(blankSlides);
+    setArticle(null);
+    setCurrentIndex(0);
+    setCoverOverride(null);
+    setCoverYouTubeId(null);
+    setCoverMediaMode('thumbnail');
+    setCoverInputUrl('');
+    setEditorTab('slides');
+    setStoryFrames([createBlankStory('hook'), createBlankStory('cta')]);
+    setCurrentStoryIndex(0);
+    setCaption({ hook: '', body: '', cta: '', hashtags: '' });
+    setTweets([]);
+    setThreadTweets([]);
     setMode('editor');
   }, []);
 
@@ -188,7 +280,157 @@ export default function App() {
     setSlides([]);
     setArticle(null);
     setCurrentIndex(0);
+    if (coverBlobRef.current) { URL.revokeObjectURL(coverBlobRef.current); coverBlobRef.current = null; }
+    setCoverOverride(null);
+    setCoverYouTubeId(null);
+    setCoverMediaMode('thumbnail');
+    setCoverInputUrl('');
+    setStoryFrames([]);
+    setCurrentStoryIndex(0);
+    setEditorTab('slides');
+    setCaption({ hook: '', body: '', cta: '', hashtags: '' });
+    setTweets([]);
+    setThreadTweets([]);
   };
+
+  // Cover image swap handler — detect YouTube URLs, store video ID + thumbnail
+  const extractYouTubeId = (url) => {
+    if (!url) return null;
+    const patterns = [
+      /(?:youtube\.com\/watch\?v=)([a-zA-Z0-9_-]{11})/,
+      /(?:youtu\.be\/)([a-zA-Z0-9_-]{11})/,
+      /(?:youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/,
+      /(?:youtube\.com\/v\/)([a-zA-Z0-9_-]{11})/,
+    ];
+    for (const p of patterns) {
+      const m = url.match(p);
+      if (m) return m[1];
+    }
+    return null;
+  };
+
+  const handleCoverImageChange = (newUrl) => {
+    setCoverInputUrl(newUrl);
+    const ytId = extractYouTubeId(newUrl);
+    if (ytId) {
+      setCoverYouTubeId(ytId);
+      // Always set thumbnail as coverOverride (used for color extraction + both modes)
+      setCoverOverride(`https://img.youtube.com/vi/${ytId}/maxresdefault.jpg`);
+    } else {
+      setCoverYouTubeId(null);
+      setCoverMediaMode('thumbnail');
+      setCoverOverride(newUrl || null);
+    }
+  };
+
+  const handleCoverFileUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (coverBlobRef.current) URL.revokeObjectURL(coverBlobRef.current);
+    const url = URL.createObjectURL(file);
+    coverBlobRef.current = url;
+    setCoverOverride(url);
+  };
+
+  // Revoke blob URL on unmount
+  useEffect(() => {
+    return () => {
+      if (coverBlobRef.current) URL.revokeObjectURL(coverBlobRef.current);
+    };
+  }, []);
+
+  // Toast helper
+  const showToast = (msg) => {
+    setToastMsg(msg);
+    setTimeout(() => setToastMsg(null), 2000);
+  };
+
+  const copyToClipboard = (text) => {
+    navigator.clipboard.writeText(text).then(() => showToast('Copied to clipboard'));
+  };
+
+  // Undo/Redo actions
+  const undo = useCallback(() => {
+    if (historyIndexRef.current <= 0) return;
+    historyIndexRef.current--;
+    const prev = historyRef.current[historyIndexRef.current];
+    if (prev) setSlides(JSON.parse(JSON.stringify(prev)));
+  }, []);
+
+  const redo = useCallback(() => {
+    if (historyIndexRef.current >= historyRef.current.length - 1) return;
+    historyIndexRef.current++;
+    const next = historyRef.current[historyIndexRef.current];
+    if (next) setSlides(JSON.parse(JSON.stringify(next)));
+  }, []);
+
+  // Push to history whenever slides change (debounced via effect)
+  const slidesJson = useMemo(() => JSON.stringify(slides), [slides]);
+  useEffect(() => {
+    if (slides.length === 0) return;
+    // Simple debounce: only push if different from current history head
+    const current = historyRef.current[historyIndexRef.current];
+    if (JSON.stringify(current) !== slidesJson) {
+      pushHistory(slides);
+    }
+  }, [slidesJson, pushHistory]);
+
+  // ── Keyboard shortcuts ──
+  useEffect(() => {
+    if (mode !== 'editor') return;
+    const handler = (e) => {
+      const tag = document.activeElement?.tagName;
+      const isInput = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+
+      const mod = e.ctrlKey || e.metaKey;
+      // Undo: Ctrl/Cmd+Z (not in text inputs to avoid conflicting with native undo)
+      if (mod && !e.shiftKey && e.key === 'z' && !isInput) {
+        e.preventDefault(); undo();
+      }
+      // Redo: Ctrl/Cmd+Shift+Z or Ctrl/Cmd+Y
+      if ((mod && e.shiftKey && (e.key === 'Z' || e.key === 'z')) || (mod && e.key === 'y' && !isInput)) {
+        e.preventDefault(); redo();
+      }
+      // Navigate slides: ← / →  (only when not in a text input)
+      if (!isInput && !mod && !e.altKey) {
+        if (e.key === 'ArrowLeft') {
+          if (isStoryView) setCurrentStoryIndex(i => Math.max(0, i - 1));
+          else setCurrentIndex(i => Math.max(0, i - 1));
+        }
+        if (e.key === 'ArrowRight') {
+          if (isStoryView) setCurrentStoryIndex(i => Math.min(storyFrames.length - 1, i + 1));
+          else setCurrentIndex(i => Math.min(slides.length - 1, i + 1));
+        }
+      }
+      // Reorder slides: Alt+← / Alt+→
+      if (e.altKey && !mod && !isInput && editorTab === 'slides') {
+        if (e.key === 'ArrowLeft' && currentIndex > 0) {
+          e.preventDefault();
+          const ns = [...slides];
+          [ns[currentIndex - 1], ns[currentIndex]] = [ns[currentIndex], ns[currentIndex - 1]];
+          let num = 0;
+          ns.forEach(s => { if (s.type === 'content') { num++; s.number = num; } });
+          setSlides(ns);
+          setCurrentIndex(currentIndex - 1);
+        }
+        if (e.key === 'ArrowRight' && currentIndex < slides.length - 1) {
+          e.preventDefault();
+          const ns = [...slides];
+          [ns[currentIndex], ns[currentIndex + 1]] = [ns[currentIndex + 1], ns[currentIndex]];
+          let num = 0;
+          ns.forEach(s => { if (s.type === 'content') { num++; s.number = num; } });
+          setSlides(ns);
+          setCurrentIndex(currentIndex + 1);
+        }
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [mode, slides, currentIndex, editorTab, isStoryView, storyFrames.length, undo, redo]);
+
+  const updateStoryField = useCallback((field, value) => {
+    setStoryFrames(prev => prev.map((s, i) => i === currentStoryIndex ? { ...s, [field]: value } : s));
+  }, [currentStoryIndex]);
 
   const updateSlideField = (id, field, value) => {
     setSlides((prev) => prev.map((s) => (s.id === id ? { ...s, [field]: value } : s)));
@@ -490,7 +732,7 @@ export default function App() {
     return (
       <div className="fixed inset-0 bg-neutral-950 flex flex-col">
         <Header imageCache={imageCache} />
-        <ArticleFetcher onSlidesGenerated={handleSlidesGenerated} />
+        <ArticleFetcher onSlidesGenerated={handleSlidesGenerated} onStartBlank={handleStartBlank} />
       </div>
     );
   }
@@ -501,21 +743,31 @@ export default function App() {
   return (
     <div className="fixed inset-0 bg-neutral-950 text-white flex flex-col overflow-hidden">
       {/* Top bar */}
-      <div className="flex-none h-14 border-b border-white/[0.06] flex items-center justify-between px-4 z-30 bg-neutral-950">
-        <div className="flex items-center gap-3">
-          <img src={imageCache.favicon} className="w-6 h-6 rounded" alt="" />
+      <div className="flex-none h-12 md:h-14 border-b border-white/[0.06] flex items-center justify-between px-2 md:px-4 z-30 bg-neutral-950">
+        <div className="flex items-center gap-2 md:gap-3 min-w-0">
+          <button onClick={() => setMobileSidebarOpen(!mobileSidebarOpen)} className="md:hidden p-1.5 rounded-lg text-white/50 hover:text-white/80 hover:bg-white/[0.06] transition-all flex-shrink-0" title="Toggle panel">
+            {mobileSidebarOpen ? <X size={18} /> : <Menu size={18} />}
+          </button>
+          <img src={imageCache.favicon} className="w-5 h-5 md:w-6 md:h-6 rounded flex-shrink-0" alt="" />
           <span className="text-sm font-semibold text-white/70 hidden sm:inline">Content Designer</span>
-          <span className="text-white/20 hidden sm:inline">·</span>
-          <span className="text-xs text-white/30 truncate max-w-[200px] hidden sm:inline">{article?.title}</span>
+          <span className="text-white/20 hidden md:inline">·</span>
+          <span className="text-xs text-white/30 truncate max-w-[200px] hidden md:inline">{article?.title}</span>
         </div>
-        <div className="flex items-center gap-2">
-          <button onClick={handleReset} className="px-3 py-1.5 text-xs font-medium text-white/50 hover:text-white/80 border border-white/[0.08] rounded-lg hover:bg-white/[0.04] transition-all flex items-center gap-1.5">
-            <RotateCcw size={13} /> New
+        <div className="flex items-center gap-1 md:gap-2">
+          <button onClick={undo} className="p-1.5 rounded-lg text-white/30 hover:text-white/70 hover:bg-white/[0.06] transition-all disabled:opacity-15 hidden sm:block" title="Undo (Ctrl+Z)" disabled={historyIndexRef.current <= 0}>
+            <Undo2 size={15} />
+          </button>
+          <button onClick={redo} className="p-1.5 rounded-lg text-white/30 hover:text-white/70 hover:bg-white/[0.06] transition-all disabled:opacity-15 hidden sm:block" title="Redo (Ctrl+Shift+Z)" disabled={historyIndexRef.current >= historyRef.current.length - 1}>
+            <Redo2 size={15} />
+          </button>
+          <div className="w-px h-5 bg-white/[0.06] mx-0.5 hidden sm:block" />
+          <button onClick={handleReset} className="px-2 md:px-3 py-1.5 text-xs font-medium text-white/50 hover:text-white/80 border border-white/[0.08] rounded-lg hover:bg-white/[0.04] transition-all flex items-center gap-1 md:gap-1.5">
+            <RotateCcw size={13} /> <span className="hidden sm:inline">New</span>
           </button>
           <div className="relative">
-            <button onClick={() => setExportMenuOpen(!exportMenuOpen)} disabled={exporting} className="px-4 py-1.5 text-xs font-semibold bg-white text-neutral-950 rounded-lg hover:bg-white/90 transition-all flex items-center gap-1.5 disabled:opacity-50">
+            <button onClick={() => setExportMenuOpen(!exportMenuOpen)} disabled={exporting} className="px-2.5 md:px-4 py-1.5 text-xs font-semibold bg-white text-neutral-950 rounded-lg hover:bg-white/90 transition-all flex items-center gap-1 md:gap-1.5 disabled:opacity-50">
               {exporting ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
-              Export <ChevronDown size={12} />
+              <span className="hidden sm:inline">Export</span> <ChevronDown size={12} />
             </button>
             {exportMenuOpen && (
               <>
@@ -553,107 +805,347 @@ export default function App() {
       </div>
 
       {/* Main editor area */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex overflow-hidden relative">
+        {/* ── Mobile sidebar backdrop ── */}
+        {mobileSidebarOpen && (
+          <div className="fixed inset-0 bg-black/60 z-30 md:hidden" onClick={() => setMobileSidebarOpen(false)} />
+        )}
+
         {/* ── Left Sidebar ── */}
-        <div className="flex-none w-72 border-r border-white/[0.06] flex flex-col bg-neutral-950/80 overflow-y-auto">
-          <div className="p-4 space-y-5 border-b border-white/[0.06]">
-            <ThemePicker activeThemeId={activeThemeId} onThemeChange={setActiveThemeId} dynamicPreview={dynamicTheme} />
-            <div className="space-y-2">
-              <label className="text-[11px] font-semibold uppercase tracking-wider text-white/30">Aspect Ratio</label>
-              <div className="flex bg-white/[0.04] p-1 rounded-lg">
-                <button onClick={() => setAspectRatio('square')} className={`flex-1 py-2 text-xs font-semibold rounded-md transition-all ${aspectRatio === 'square' ? 'bg-white/[0.1] text-white' : 'text-white/40 hover:text-white/60'}`}>1:1</button>
-                <button onClick={() => setAspectRatio('portrait')} className={`flex-1 py-2 text-xs font-semibold rounded-md transition-all ${aspectRatio === 'portrait' ? 'bg-white/[0.1] text-white' : 'text-white/40 hover:text-white/60'}`}>4:5</button>
-              </div>
-            </div>
+        <div className={`
+          fixed top-12 bottom-0 left-0 z-40 w-[85vw] max-w-[320px] transform transition-transform duration-300 ease-in-out
+          md:relative md:top-auto md:bottom-auto md:inset-auto md:z-auto md:w-72 md:max-w-none md:transform-none
+          flex-none border-r border-white/[0.06] flex flex-col bg-neutral-950
+          ${mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
+        `}>
+          {/* Tab bar */}
+          <div className="flex-none flex border-b border-white/[0.06]">
+            {[
+              { id: 'slides', icon: Layers, label: 'Slides' },
+              { id: 'stories', icon: BookOpen, label: 'Stories' },
+              { id: 'caption', icon: MessageSquare, label: 'Caption' },
+              { id: 'twitter', icon: Twitter, label: 'Twitter' },
+            ].map(({ id, icon: Icon, label }) => (
+              <button
+                key={id}
+                onClick={() => { setEditorTab(id); }}
+                className={`flex-1 py-2.5 text-[10px] font-semibold uppercase tracking-wider flex flex-col items-center gap-1 transition-all ${
+                  editorTab === id ? 'text-white bg-white/[0.04] border-b-2 border-violet-500' : 'text-white/30 hover:text-white/50'
+                }`}
+              >
+                <Icon size={14} />
+                {label}
+              </button>
+            ))}
           </div>
-          <div className="p-4 space-y-4 flex-1">
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-white/30">Slide {currentIndex + 1} of {slides.length}</span>
-              <div className="flex gap-1">
-                <button onClick={addSlideAfter} className="p-1.5 rounded-md hover:bg-white/[0.06] text-white/40 hover:text-white/70 transition-colors" title="Add slide after"><Plus size={14} /></button>
-                <button onClick={duplicateCurrentSlide} className="p-1.5 rounded-md hover:bg-white/[0.06] text-white/40 hover:text-white/70 transition-colors" title="Duplicate slide"><Copy size={14} /></button>
-                <button onClick={deleteCurrentSlide} disabled={slides.length <= 2} className="p-1.5 rounded-md hover:bg-red-500/10 text-white/40 hover:text-red-400 transition-colors disabled:opacity-20" title="Delete slide"><Trash2 size={14} /></button>
-              </div>
-            </div>
-            {currentSlide && (
-              <div className="space-y-3">
-                <div>
-                  <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Title</label>
-                  <input type="text" value={currentSlide.title || ''} onChange={(e) => updateSlideField(currentSlide.id, 'title', e.target.value)} className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors" />
-                </div>
-                {currentSlide.type === 'content' && (
-                  <>
-                    <div>
-                      <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Content</label>
-                      <textarea value={currentSlide.content || ''} onChange={(e) => updateSlideField(currentSlide.id, 'content', e.target.value)} rows={4} className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors resize-none" />
-                      <div className="text-[10px] text-white/20 mt-1 text-right">{(currentSlide.content || '').length} / 200 chars</div>
+
+          <div className="flex-1 overflow-y-auto pb-20 md:pb-4">
+            {/* ── Slides Tab ── */}
+            {editorTab === 'slides' && (
+              <>
+                <div className="p-4 space-y-5 border-b border-white/[0.06]">
+                  <ThemePicker activeThemeId={activeThemeId} onThemeChange={setActiveThemeId} dynamicPreview={dynamicTheme} />
+                  <div className="space-y-2">
+                    <label className="text-[11px] font-semibold uppercase tracking-wider text-white/30">Aspect Ratio</label>
+                    <div className="flex bg-white/[0.04] p-1 rounded-lg">
+                      <button onClick={() => setAspectRatio('square')} className={`flex-1 py-2 text-xs font-semibold rounded-md transition-all ${aspectRatio === 'square' ? 'bg-white/[0.1] text-white' : 'text-white/40 hover:text-white/60'}`}>1:1</button>
+                      <button onClick={() => setAspectRatio('portrait')} className={`flex-1 py-2 text-xs font-semibold rounded-md transition-all ${aspectRatio === 'portrait' ? 'bg-white/[0.1] text-white' : 'text-white/40 hover:text-white/60'}`}>4:5</button>
                     </div>
-                    <div>
-                      <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 flex items-center gap-2">
-                        Image Slide
-                        <button
-                          onClick={() => updateSlideField(currentSlide.id, 'imageSlide', !currentSlide.imageSlide)}
-                          className={`w-8 h-4 rounded-full transition-colors ${currentSlide.imageSlide ? 'bg-violet-500' : 'bg-white/10'}`}
-                        >
-                          <div className={`w-3 h-3 rounded-full bg-white transition-transform ${currentSlide.imageSlide ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                  </div>
+                  {/* Cover Image Swap */}
+                  <div className="space-y-2">
+                    <label className="text-[11px] font-semibold uppercase tracking-wider text-white/30">Cover Image</label>
+                    {imageCache.cover && (
+                      <div className="rounded-lg overflow-hidden border border-white/[0.06]" style={{ height: 56 }}>
+                        <img src={imageCache.cover} alt="" className="w-full h-full object-cover" />
+                      </div>
+                    )}
+                    <input
+                      type="text"
+                      value={coverInputUrl}
+                      onChange={(e) => handleCoverImageChange(e.target.value)}
+                      placeholder="Image or YouTube URL to override..."
+                      className="w-full px-3 py-2 bg-white/[0.04] border border-white/[0.08] rounded-lg text-xs text-white outline-none focus:border-white/20 transition-colors placeholder:text-white/15"
+                    />
+                    {/* YouTube detected — show video/thumbnail toggle */}
+                    {coverYouTubeId && (
+                      <div className="flex bg-white/[0.04] p-0.5 rounded-lg">
+                        <button onClick={() => setCoverMediaMode('thumbnail')} className={`flex-1 py-1.5 text-[10px] font-semibold rounded-md transition-all flex items-center justify-center gap-1.5 ${coverMediaMode === 'thumbnail' ? 'bg-white/[0.1] text-white' : 'text-white/40 hover:text-white/60'}`}>
+                          <ImageIcon size={11} /> Thumbnail
                         </button>
+                        <button onClick={() => setCoverMediaMode('video')} className={`flex-1 py-1.5 text-[10px] font-semibold rounded-md transition-all flex items-center justify-center gap-1.5 ${coverMediaMode === 'video' ? 'bg-white/[0.1] text-white' : 'text-white/40 hover:text-white/60'}`}>
+                          <Video size={11} /> Video Autoplay
+                        </button>
+                      </div>
+                    )}
+                    <div className="flex gap-1.5">
+                      <label className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-[10px] font-medium text-white/40 hover:text-white/70 bg-white/[0.04] border border-white/[0.08] rounded-lg cursor-pointer hover:bg-white/[0.06] transition-all">
+                        <Upload size={12} /> Upload File
+                        <input type="file" accept="image/*" onChange={handleCoverFileUpload} className="hidden" />
                       </label>
-                      {currentSlide.imageSlide && (
+                      {coverOverride && article?.featureImage && (
+                        <button
+                          onClick={() => { setCoverOverride(null); setCoverYouTubeId(null); setCoverMediaMode('thumbnail'); setCoverInputUrl(''); }}
+                          className="flex items-center gap-1 px-2 py-1.5 text-[10px] font-medium text-white/40 hover:text-white/70 bg-white/[0.04] border border-white/[0.08] rounded-lg hover:bg-white/[0.06] transition-all"
+                        >
+                          <RotateCw size={11} /> Reset
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <div className="p-4 space-y-4 flex-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-white/30">Slide {currentIndex + 1} of {slides.length}</span>
+                    <div className="flex gap-1">
+                      <button onClick={addSlideAfter} className="p-1.5 rounded-md hover:bg-white/[0.06] text-white/40 hover:text-white/70 transition-colors" title="Add slide after"><Plus size={14} /></button>
+                      <button onClick={duplicateCurrentSlide} className="p-1.5 rounded-md hover:bg-white/[0.06] text-white/40 hover:text-white/70 transition-colors" title="Duplicate slide"><Copy size={14} /></button>
+                      <button onClick={deleteCurrentSlide} disabled={slides.length <= 2} className="p-1.5 rounded-md hover:bg-red-500/10 text-white/40 hover:text-red-400 transition-colors disabled:opacity-20" title="Delete slide"><Trash2 size={14} /></button>
+                    </div>
+                  </div>
+                  {currentSlide && (
+                    <div className="space-y-3">
+                      <div>
+                        <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Title</label>
+                        <input type="text" value={currentSlide.title || ''} onChange={(e) => updateSlideField(currentSlide.id, 'title', e.target.value)} className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors" />
+                      </div>
+                      {currentSlide.type === 'content' && (
                         <>
-                          <input type="text" value={currentSlide.image || ''} onChange={(e) => updateSlideField(currentSlide.id, 'image', e.target.value || null)} placeholder="Image URL (full-bleed bg)" className="w-full mt-1 px-3 py-2 bg-white/[0.04] border border-white/[0.08] rounded-lg text-xs text-white outline-none focus:border-white/20 transition-colors placeholder:text-white/15" />
-                          {currentSlide.image && (
-                            <div className="mt-1.5 rounded-md overflow-hidden border border-white/[0.06]" style={{ height: 48 }}>
-                              <img src={currentSlide.image} alt="" className="w-full h-full object-cover" />
+                          <div>
+                            <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Content</label>
+                            <textarea value={currentSlide.content || ''} onChange={(e) => updateSlideField(currentSlide.id, 'content', e.target.value)} rows={4} className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors resize-none" />
+                            <div className="text-[10px] text-white/20 mt-1 text-right">{(currentSlide.content || '').length} / 200 chars</div>
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 flex items-center gap-2">
+                              Image Slide
+                              <button
+                                onClick={() => updateSlideField(currentSlide.id, 'imageSlide', !currentSlide.imageSlide)}
+                                className={`w-8 h-4 rounded-full transition-colors ${currentSlide.imageSlide ? 'bg-violet-500' : 'bg-white/10'}`}
+                              >
+                                <div className={`w-3 h-3 rounded-full bg-white transition-transform ${currentSlide.imageSlide ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                              </button>
+                            </label>
+                            {currentSlide.imageSlide && (
+                              <>
+                                <input type="text" value={currentSlide.image || ''} onChange={(e) => updateSlideField(currentSlide.id, 'image', e.target.value || null)} placeholder="Image URL (full-bleed bg)" className="w-full mt-1 px-3 py-2 bg-white/[0.04] border border-white/[0.08] rounded-lg text-xs text-white outline-none focus:border-white/20 transition-colors placeholder:text-white/15" />
+                                {currentSlide.image && (
+                                  <div className="mt-1.5 rounded-md overflow-hidden border border-white/[0.06]" style={{ height: 48 }}>
+                                    <img src={currentSlide.image} alt="" className="w-full h-full object-cover" />
+                                  </div>
+                                )}
+                              </>
+                            )}
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Video URL <span className="text-white/15 normal-case">(YouTube or mp4)</span></label>
+                            <div className="flex gap-1.5">
+                              <input
+                                type="text"
+                                value={currentSlide.videoUrl || ''}
+                                onChange={(e) => {
+                                  const raw = e.target.value || null;
+                                  if (raw) {
+                                    const norm = normaliseYouTubeUrl(raw);
+                                    updateSlideField(currentSlide.id, 'videoUrl', norm);
+                                    const ytMatch = norm.match(/[?&]v=([a-zA-Z0-9_-]{11})/);
+                                    if (ytMatch) {
+                                      updateSlideField(currentSlide.id, 'image', `https://img.youtube.com/vi/${ytMatch[1]}/maxresdefault.jpg`);
+                                      updateSlideField(currentSlide.id, 'imageSlide', true);
+                                    }
+                                  } else {
+                                    updateSlideField(currentSlide.id, 'videoUrl', null);
+                                  }
+                                }}
+                                placeholder="https://youtu.be/... or https://...video.mp4"
+                                className="flex-1 px-3 py-2 bg-white/[0.04] border border-white/[0.08] rounded-lg text-xs text-white outline-none focus:border-white/20 transition-colors placeholder:text-white/15"
+                              />
+                              {currentSlide.videoUrl && (
+                                <button onClick={() => { updateSlideField(currentSlide.id, 'videoUrl', null); }} className="px-2 py-1 text-[10px] text-red-400/60 hover:text-red-400 hover:bg-red-500/10 rounded-md transition-colors" title="Remove video">✕</button>
+                              )}
                             </div>
-                          )}
+                            {currentSlide.videoUrl && /youtube|youtu\.be/i.test(currentSlide.videoUrl) && (
+                              <div className="text-[10px] text-violet-400/60 mt-1">YouTube video detected — thumbnail auto-set</div>
+                            )}
+                          </div>
                         </>
                       )}
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Video URL <span className="text-white/15 normal-case">(YouTube or mp4)</span></label>
-                      <div className="flex gap-1.5">
-                        <input
-                          type="text"
-                          value={currentSlide.videoUrl || ''}
-                          onChange={(e) => {
-                            const raw = e.target.value || null;
-                            if (raw) {
-                              const norm = normaliseYouTubeUrl(raw);
-                              updateSlideField(currentSlide.id, 'videoUrl', norm);
-                              // Auto-set YouTube thumbnail as image + mark as image slide
-                              const ytMatch = norm.match(/[?&]v=([a-zA-Z0-9_-]{11})/);
-                              if (ytMatch) {
-                                updateSlideField(currentSlide.id, 'image', `https://img.youtube.com/vi/${ytMatch[1]}/maxresdefault.jpg`);
-                                updateSlideField(currentSlide.id, 'imageSlide', true);
-                              }
-                            } else {
-                              updateSlideField(currentSlide.id, 'videoUrl', null);
-                            }
-                          }}
-                          placeholder="https://youtu.be/... or https://...video.mp4"
-                          className="flex-1 px-3 py-2 bg-white/[0.04] border border-white/[0.08] rounded-lg text-xs text-white outline-none focus:border-white/20 transition-colors placeholder:text-white/15"
-                        />
-                        {currentSlide.videoUrl && (
-                          <button onClick={() => { updateSlideField(currentSlide.id, 'videoUrl', null); }} className="px-2 py-1 text-[10px] text-red-400/60 hover:text-red-400 hover:bg-red-500/10 rounded-md transition-colors" title="Remove video">✕</button>
-                        )}
-                      </div>
-                      {currentSlide.videoUrl && /youtube|youtu\.be/i.test(currentSlide.videoUrl) && (
-                        <div className="text-[10px] text-violet-400/60 mt-1">YouTube video detected — thumbnail auto-set</div>
+                      {(currentSlide.type === 'cover' || currentSlide.type === 'cta') && currentSlide.subtitle !== undefined && (
+                        <div>
+                          <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Subtitle / Tag</label>
+                          <input type="text" value={currentSlide.subtitle || ''} onChange={(e) => updateSlideField(currentSlide.id, 'subtitle', e.target.value)} className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors" />
+                        </div>
+                      )}
+                      {currentSlide.type === 'cover' && (
+                        <div>
+                          <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Reading Time</label>
+                          <input type="text" value={currentSlide.readingTime || ''} onChange={(e) => updateSlideField(currentSlide.id, 'readingTime', e.target.value)} className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors" />
+                        </div>
                       )}
                     </div>
-                  </>
-                )}
-                {(currentSlide.type === 'cover' || currentSlide.type === 'cta') && currentSlide.subtitle !== undefined && (
-                  <div>
-                    <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Subtitle / Tag</label>
-                    <input type="text" value={currentSlide.subtitle || ''} onChange={(e) => updateSlideField(currentSlide.id, 'subtitle', e.target.value)} className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors" />
+                  )}
+                </div>
+              </>
+            )}
+
+            {/* ── Stories Tab ── */}
+            {editorTab === 'stories' && (
+              <div className="p-4 space-y-4">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-white/30">
+                    Story {currentStoryIndex + 1} of {storyFrames.length}
+                  </span>
+                  <div className="flex gap-1">
+                    <button
+                      onClick={() => {
+                        const ns = createBlankStory('hook');
+                        const nf = [...storyFrames];
+                        nf.splice(currentStoryIndex + 1, 0, ns);
+                        setStoryFrames(nf);
+                        setCurrentStoryIndex(currentStoryIndex + 1);
+                      }}
+                      className="p-1.5 rounded-md hover:bg-white/[0.06] text-white/40 hover:text-white/70 transition-colors" title="Add story frame"
+                    ><Plus size={14} /></button>
+                    <button
+                      onClick={() => {
+                        if (storyFrames.length <= 1) return;
+                        const nf = storyFrames.filter((_, i) => i !== currentStoryIndex);
+                        setStoryFrames(nf);
+                        setCurrentStoryIndex(Math.max(0, currentStoryIndex - 1));
+                      }}
+                      disabled={storyFrames.length <= 1}
+                      className="p-1.5 rounded-md hover:bg-red-500/10 text-white/40 hover:text-red-400 transition-colors disabled:opacity-20" title="Delete story frame"
+                    ><Trash2 size={14} /></button>
                   </div>
+                </div>
+                {storyFrames[currentStoryIndex] && (
+                    <div className="space-y-3">
+                      <div>
+                        <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Type</label>
+                        <div className="flex bg-white/[0.04] p-1 rounded-lg">
+                          {['hook', 'teaser', 'poll', 'cta'].map(t => (
+                            <button key={t} onClick={() => updateStoryField('type', t)} className={`flex-1 py-1.5 text-[10px] font-semibold rounded-md transition-all capitalize ${storyFrames[currentStoryIndex].type === t ? 'bg-white/[0.1] text-white' : 'text-white/40 hover:text-white/60'}`}>{t}</button>
+                          ))}
+                        </div>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Headline</label>
+                        <textarea value={storyFrames[currentStoryIndex].headline || ''} onChange={(e) => updateStoryField('headline', e.target.value)} rows={2} className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors resize-none" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Subtext</label>
+                        <textarea value={storyFrames[currentStoryIndex].subtext || ''} onChange={(e) => updateStoryField('subtext', e.target.value)} rows={2} className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors resize-none" />
+                      </div>
+                      {storyFrames[currentStoryIndex].type === 'poll' && (
+                        <div>
+                          <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Poll Options</label>
+                          {(storyFrames[currentStoryIndex].pollOptions || ['Yes', 'No']).map((opt, oi) => (
+                            <input key={oi} type="text" value={opt} onChange={(e) => {
+                              const opts = [...(storyFrames[currentStoryIndex].pollOptions || ['Yes', 'No'])];
+                              opts[oi] = e.target.value;
+                              updateStoryField('pollOptions', opts);
+                            }} className="w-full mb-1 px-3 py-2 bg-white/[0.04] border border-white/[0.08] rounded-lg text-xs text-white outline-none focus:border-white/20 transition-colors" />
+                          ))}
+                        </div>
+                      )}
+                      <div>
+                        <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">CTA Label</label>
+                        <input type="text" value={storyFrames[currentStoryIndex].ctaLabel || ''} onChange={(e) => updateStoryField('ctaLabel', e.target.value)} placeholder="Swipe up · See carousel" className="w-full px-3 py-2 bg-white/[0.04] border border-white/[0.08] rounded-lg text-xs text-white outline-none focus:border-white/20 transition-colors placeholder:text-white/15" />
+                      </div>
+                    </div>
                 )}
-                {currentSlide.type === 'cover' && (
-                  <div>
-                    <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Reading Time</label>
-                    <input type="text" value={currentSlide.readingTime || ''} onChange={(e) => updateSlideField(currentSlide.id, 'readingTime', e.target.value)} className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors" />
+              </div>
+            )}
+
+            {/* ── Caption Tab ── */}
+            {editorTab === 'caption' && (
+              <div className="p-4 space-y-4">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-white/30">Instagram Caption</span>
+                  <div className="flex gap-1">
+                    {article && (
+                      <button onClick={() => setCaption(generateCaption(article, slides))} className="p-1.5 rounded-md hover:bg-white/[0.06] text-white/40 hover:text-white/70 transition-colors" title="Regenerate"><RotateCw size={13} /></button>
+                    )}
+                    <button onClick={() => copyToClipboard(`${caption.hook}\n\n${caption.body}\n\n${caption.cta}\n\n${caption.hashtags}`)} className="p-1.5 rounded-md hover:bg-white/[0.06] text-white/40 hover:text-white/70 transition-colors" title="Copy all"><Copy size={13} /></button>
                   </div>
+                </div>
+                <div>
+                  <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Hook Line</label>
+                  <textarea value={caption.hook} onChange={(e) => setCaption(p => ({ ...p, hook: e.target.value }))} rows={2} className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors resize-none" />
+                </div>
+                <div>
+                  <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Body</label>
+                  <textarea value={caption.body} onChange={(e) => setCaption(p => ({ ...p, body: e.target.value }))} rows={5} className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors resize-none" />
+                </div>
+                <div>
+                  <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">CTA</label>
+                  <textarea value={caption.cta} onChange={(e) => setCaption(p => ({ ...p, cta: e.target.value }))} rows={2} className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors resize-none" />
+                </div>
+                <div>
+                  <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 flex items-center justify-between">
+                    <span>Hashtags</span>
+                    <button onClick={() => copyToClipboard(caption.hashtags)} className="text-white/30 hover:text-white/60 transition-colors" title="Copy hashtags"><Copy size={11} /></button>
+                  </label>
+                  <textarea value={caption.hashtags} onChange={(e) => setCaption(p => ({ ...p, hashtags: e.target.value }))} rows={3} className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-xs text-white/60 outline-none focus:border-white/20 transition-colors resize-none" />
+                </div>
+                <div className="text-[10px] text-white/20 text-right">
+                  {`${caption.hook}\n\n${caption.body}\n\n${caption.cta}\n\n${caption.hashtags}`.length} / 2,200 chars
+                </div>
+              </div>
+            )}
+
+            {/* ── Twitter Tab ── */}
+            {editorTab === 'twitter' && (
+              <div className="p-4 space-y-4">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-white/30">Twitter / X</span>
+                  <div className="flex gap-1">
+                    {article && (
+                      <button onClick={() => {
+                        if (tweetMode === 'single') { const t = generateTweet(article); setTweets(t); }
+                        else { const t = generateThread(article, slides); setThreadTweets(t); }
+                      }} className="p-1.5 rounded-md hover:bg-white/[0.06] text-white/40 hover:text-white/70 transition-colors" title="Regenerate"><RotateCw size={13} /></button>
+                    )}
+                    <button onClick={() => { const active = tweetMode === 'single' ? tweets : threadTweets; copyToClipboard(active.map(t => typeof t === 'string' ? t : t.text).join('\n\n---\n\n')); }} className="p-1.5 rounded-md hover:bg-white/[0.06] text-white/40 hover:text-white/70 transition-colors" title="Copy all"><Copy size={13} /></button>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[11px] font-semibold uppercase tracking-wider text-white/30">Mode</label>
+                  <div className="flex bg-white/[0.04] p-1 rounded-lg">
+                    <button onClick={() => { setTweetMode('single'); }} className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all ${tweetMode === 'single' ? 'bg-white/[0.1] text-white' : 'text-white/40 hover:text-white/60'}`}>Single</button>
+                    <button onClick={() => { setTweetMode('thread'); }} className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all ${tweetMode === 'thread' ? 'bg-white/[0.1] text-white' : 'text-white/40 hover:text-white/60'}`}>Thread</button>
+                  </div>
+                </div>
+                {(tweetMode === 'single' ? tweets : threadTweets).map((tw, i) => {
+                  const text = typeof tw === 'string' ? tw : tw.text;
+                  const setter = tweetMode === 'single' ? setTweets : setThreadTweets;
+                  return (
+                    <div key={i} className="space-y-1">
+                      {tweetMode === 'thread' && <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider">Tweet {i + 1} / {threadTweets.length}</label>}
+                      <textarea
+                        value={text}
+                        onChange={(e) => {
+                          setter(prev => prev.map((t, j) => j === i ? (typeof t === 'string' ? e.target.value : { ...t, text: e.target.value }) : t));
+                        }}
+                        rows={3}
+                        className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors resize-none"
+                      />
+                      <div className="flex items-center justify-between">
+                        <span className={`text-[10px] ${text.length > 280 ? 'text-red-400' : text.length > 260 ? 'text-yellow-400/70' : 'text-white/20'}`}>
+                          {text.length} / 280
+                        </span>
+                        <button onClick={() => copyToClipboard(text)} className="text-[10px] text-white/30 hover:text-white/60 transition-colors">Copy</button>
+                      </div>
+                    </div>
+                  );
+                })}
+                {tweetMode === 'thread' && (
+                  <button
+                    onClick={() => setThreadTweets(prev => [...prev, ''])}
+                    className="w-full py-2 text-xs text-white/30 hover:text-white/60 border border-dashed border-white/[0.08] rounded-lg hover:bg-white/[0.02] transition-all flex items-center justify-center gap-1"
+                  >
+                    <Plus size={12} /> Add Tweet
+                  </button>
                 )}
               </div>
             )}
@@ -664,21 +1156,81 @@ export default function App() {
         <div className="flex-1 flex flex-col min-w-0">
           <div ref={previewContainerRef} className="flex-1 flex items-center justify-center relative overflow-hidden">
             <div className="absolute inset-0 pointer-events-none opacity-[0.03]" style={{ backgroundImage: 'radial-gradient(#fff 1px, transparent 1px)', backgroundSize: '20px 20px' }} />
-            <div className="flex items-center gap-4 z-10 relative">
-              <button onClick={() => setCurrentIndex(Math.max(0, currentIndex - 1))} disabled={currentIndex === 0} className="p-3 bg-white/[0.06] border border-white/[0.08] rounded-full text-white/60 disabled:opacity-20 hover:bg-white/[0.1] transition-all"><ArrowLeft size={18} /></button>
-              <div className="relative slide-shadow rounded-sm" style={{ width: 1080 * scale, height: slideHeight * scale }}>
-                <div className="absolute top-0 left-0 origin-top-left" style={{ width: 1080, height: slideHeight, transform: `scale(${scale})` }}>
-                  <SlideCanvas slide={currentSlide} index={currentIndex} totalSlides={slides.length} theme={resolvedTheme} aspectRatio={aspectRatio} imageCache={imageCache} />
+
+            {/* Slides / Stories preview */}
+            {(editorTab === 'slides' || editorTab === 'caption' || editorTab === 'twitter') && (
+              <div className="flex items-center gap-1 sm:gap-4 z-10 relative px-1 sm:px-0">
+                <button onClick={() => setCurrentIndex(Math.max(0, currentIndex - 1))} disabled={currentIndex === 0} className="p-1.5 sm:p-3 bg-white/[0.06] border border-white/[0.08] rounded-full text-white/60 disabled:opacity-20 hover:bg-white/[0.1] transition-all flex-shrink-0"><ArrowLeft size={16} /></button>
+                <div className="relative slide-shadow rounded-sm" style={{ width: previewW * scale, height: previewH * scale }}>
+                  <div className="absolute top-0 left-0 origin-top-left" style={{ width: previewW, height: previewH, transform: `scale(${scale})` }}>
+                    <SlideCanvas slide={currentSlide} index={currentIndex} totalSlides={slides.length} theme={resolvedTheme} aspectRatio={aspectRatio} imageCache={imageCache} coverYouTubeId={coverYouTubeId} coverMediaMode={coverMediaMode} />
+                  </div>
+                  <div className="absolute top-2 right-2 opacity-0 hover:opacity-100 transition-opacity z-20">
+                    <button onClick={handleExportSingle} disabled={exporting} className="p-2 bg-black/70 text-white rounded-lg hover:bg-black backdrop-blur-sm border border-white/10" title="Download this slide"><Download size={16} /></button>
+                  </div>
                 </div>
-                <div className="absolute top-2 right-2 opacity-0 hover:opacity-100 transition-opacity z-20">
-                  <button onClick={handleExportSingle} disabled={exporting} className="p-2 bg-black/70 text-white rounded-lg hover:bg-black backdrop-blur-sm border border-white/10" title="Download this slide"><Download size={16} /></button>
-                </div>
+                <button onClick={() => setCurrentIndex(Math.min(slides.length - 1, currentIndex + 1))} disabled={currentIndex === slides.length - 1} className="p-1.5 sm:p-3 bg-white/[0.06] border border-white/[0.08] rounded-full text-white/60 disabled:opacity-20 hover:bg-white/[0.1] transition-all flex-shrink-0"><ArrowRight size={16} /></button>
               </div>
-              <button onClick={() => setCurrentIndex(Math.min(slides.length - 1, currentIndex + 1))} disabled={currentIndex === slides.length - 1} className="p-3 bg-white/[0.06] border border-white/[0.08] rounded-full text-white/60 disabled:opacity-20 hover:bg-white/[0.1] transition-all"><ArrowRight size={18} /></button>
-            </div>
+            )}
+
+            {editorTab === 'stories' && storyFrames.length > 0 && (
+              <div className="flex items-center gap-1 sm:gap-4 z-10 relative px-1 sm:px-0">
+                <button onClick={() => setCurrentStoryIndex(Math.max(0, currentStoryIndex - 1))} disabled={currentStoryIndex === 0} className="p-1.5 sm:p-3 bg-white/[0.06] border border-white/[0.08] rounded-full text-white/60 disabled:opacity-20 hover:bg-white/[0.1] transition-all flex-shrink-0"><ArrowLeft size={16} /></button>
+                <div className="relative slide-shadow rounded-sm" style={{ width: previewW * scale, height: previewH * scale }}>
+                  <div className="absolute top-0 left-0 origin-top-left" style={{ width: previewW, height: previewH, transform: `scale(${scale})` }}>
+                    <StoryCanvas frame={storyFrames[currentStoryIndex]} index={currentStoryIndex} totalFrames={storyFrames.length} theme={resolvedTheme} imageCache={imageCache} coverOverride={coverOverride} coverYouTubeId={coverYouTubeId} coverMediaMode={coverMediaMode} />
+                  </div>
+                </div>
+                <button onClick={() => setCurrentStoryIndex(Math.min(storyFrames.length - 1, currentStoryIndex + 1))} disabled={currentStoryIndex === storyFrames.length - 1} className="p-1.5 sm:p-3 bg-white/[0.06] border border-white/[0.08] rounded-full text-white/60 disabled:opacity-20 hover:bg-white/[0.1] transition-all flex-shrink-0"><ArrowRight size={16} /></button>
+              </div>
+            )}
           </div>
-          <div className="flex-none border-t border-white/[0.06] bg-neutral-950/80 px-4 py-2">
-            <ThumbnailStrip slides={slides} currentIndex={currentIndex} onSelect={setCurrentIndex} theme={resolvedTheme} aspectRatio={aspectRatio} imageCache={imageCache} />
+
+          {/* Mobile bottom tab bar — quick tab switching without opening sidebar */}
+          <div className="flex-none flex md:hidden border-t border-white/[0.06] bg-neutral-950">
+            {[
+              { id: 'slides', icon: Layers, label: 'Slides' },
+              { id: 'stories', icon: BookOpen, label: 'Stories' },
+              { id: 'caption', icon: MessageSquare, label: 'Caption' },
+              { id: 'twitter', icon: Twitter, label: 'Twitter' },
+            ].map(({ id, icon: Icon, label }) => (
+              <button
+                key={id}
+                onClick={() => { setEditorTab(id); setMobileSidebarOpen(false); }}
+                className={`flex-1 py-2 text-[9px] font-semibold uppercase tracking-wider flex flex-col items-center gap-0.5 transition-all ${
+                  editorTab === id ? 'text-violet-400' : 'text-white/30'
+                }`}
+              >
+                <Icon size={16} />
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {/* Thumbnail strip — slides or stories */}
+          <div className="flex-none border-t border-white/[0.06] bg-neutral-950/80 px-2 md:px-4 py-1.5 md:py-2">
+            {editorTab === 'stories' ? (
+              <div className="flex gap-1.5 md:gap-2 overflow-x-auto py-1 md:py-2 px-1" style={{ scrollbarWidth: 'none', WebkitOverflowScrolling: 'touch' }}>
+                {storyFrames.map((sf, i) => (
+                  <button
+                    key={sf.id}
+                    onClick={() => setCurrentStoryIndex(i)}
+                    className={`flex-shrink-0 rounded-lg border-2 transition-all overflow-hidden relative ${
+                      i === currentStoryIndex
+                        ? 'border-violet-500 ring-2 ring-violet-500/30 scale-105'
+                        : 'border-white/[0.06] hover:border-white/20 opacity-60 hover:opacity-100'
+                    }`}
+                    style={{ width: 36, height: 64 }}
+                  >
+                    <div style={{ width: 1080, height: 1920, transform: `scale(${36 / 1080})`, transformOrigin: 'top left', pointerEvents: 'none' }}>
+                      <StoryCanvas frame={sf} index={i} totalFrames={storyFrames.length} theme={resolvedTheme} imageCache={imageCache} coverOverride={coverOverride} coverYouTubeId={coverYouTubeId} coverMediaMode={coverMediaMode} />
+                    </div>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <ThumbnailStrip slides={slides} currentIndex={currentIndex} onSelect={setCurrentIndex} theme={resolvedTheme} aspectRatio={aspectRatio} imageCache={imageCache} />
+            )}
           </div>
         </div>
       </div>
@@ -749,14 +1301,21 @@ export default function App() {
           </p>
         </div>
       )}
+
+      {/* ── Toast notification ── */}
+      {toastMsg && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[70] px-4 py-2.5 bg-neutral-800 border border-white/[0.1] rounded-xl text-sm text-white/80 shadow-2xl animate-fade-in">
+          {toastMsg}
+        </div>
+      )}
     </div>
   );
 }
 
 function Header({ imageCache }) {
   return (
-    <div className="flex-none h-14 border-b border-white/[0.06] flex items-center px-4">
-      <img src={imageCache.favicon} className="w-6 h-6 rounded mr-2.5" alt="" />
+    <div className="flex-none h-12 md:h-14 border-b border-white/[0.06] flex items-center px-3 md:px-4">
+      <img src={imageCache.favicon} className="w-5 h-5 md:w-6 md:h-6 rounded mr-2 md:mr-2.5" alt="" />
       <span className="text-sm font-semibold text-white/70">Content Designer</span>
     </div>
   );

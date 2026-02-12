@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Lock, ArrowRight, AlertCircle } from 'lucide-react';
+import { ArrowRight, AlertCircle } from 'lucide-react';
 import { hashPassword } from '../lib/utils';
 import CONFIG from '../config';
 
@@ -37,9 +37,7 @@ export default function PasswordGate({ onAuthenticated }) {
 
       <div className="relative w-full max-w-sm">
         <div className="text-center mb-10">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-white/[0.06] border border-white/[0.08] mb-6">
-            <Lock size={28} className="text-white/60" />
-          </div>
+          <img src={CONFIG.brand.logoWhite} alt={CONFIG.brand.name} className="h-8 mx-auto mb-5 opacity-90" />
           <h1 className="text-2xl font-bold text-white mb-2">Content Designer</h1>
           <p className="text-sm text-white/40">Enter password to continue</p>
         </div>

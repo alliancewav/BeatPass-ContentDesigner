@@ -145,7 +145,7 @@ const parseSections = (doc, featureImage) => {
 
   for (const h2 of h2s) {
     let rawTitle = h2.innerText.replace(/\s+/g, ' ').trim();
-    // Truncate very long titles at word boundary (max ~65 chars for slide readability)
+    // Truncate very long titles at word boundary
     if (rawTitle.length > MAX_TITLE_LEN) {
       rawTitle = rawTitle.substring(0, MAX_TITLE_LEN).replace(/\s+\S*$/, '').trim() || rawTitle.substring(0, MAX_TITLE_LEN);
     }
@@ -154,18 +154,28 @@ const parseSections = (doc, featureImage) => {
       paragraphs: [],
       bullets: [],
       image: null,
+      subHeadings: [],        // H3 titles within this section
+      h3Paragraphs: new Map(), // H3 title → [following paragraphs] (for FAQ Q&A)
     };
 
-    // Only look FORWARD within the section for images (not backward —
-    // backward lookup picks up promo banners and website screenshots)
-
-    // Walk siblings until next H2
+    // Walk siblings until next H2, capturing H3 context
     let node = h2.nextElementSibling;
     const listNodes = [];
+    let currentH3 = null; // Track which H3 we're under
 
     while (node) {
       if (node.tagName === 'H2') break;
-      if (node.tagName === 'H3') { node = node.nextElementSibling; continue; }
+
+      if (node.tagName === 'H3') {
+        const h3Text = node.innerText.replace(/\s+/g, ' ').trim();
+        if (h3Text.length > 3) {
+          section.subHeadings.push(h3Text);
+          currentH3 = h3Text;
+          section.h3Paragraphs.set(currentH3, []);
+        }
+        node = node.nextElementSibling;
+        continue;
+      }
 
       // Capture first image in section only
       if (!section.image) {
@@ -176,7 +186,13 @@ const parseSections = (doc, featureImage) => {
       if (node.tagName === 'P') {
         for (const br of node.querySelectorAll('br')) br.replaceWith(' ');
         const text = node.innerText.replace(/\s+/g, ' ').trim();
-        if (text.length > 15) section.paragraphs.push(text);
+        if (text.length > 15) {
+          section.paragraphs.push(text);
+          // Also track which H3 this paragraph belongs to
+          if (currentH3 && section.h3Paragraphs.has(currentH3)) {
+            section.h3Paragraphs.get(currentH3).push(text);
+          }
+        }
       }
 
       if (node.tagName === 'UL' || node.tagName === 'OL') {
@@ -447,11 +463,15 @@ const extractContentSlides = (html, featureImage) => {
     const hasImage = sec.image ? 20 : 0;
     // Slight bonus for earlier sections (more important context)
     const posBonus = Math.max(0, 10 - i * 2);
-    // Penalize link-list / "next reads" sections (bullets only, no paragraphs, near end)
-    const titleLower = sec.title.toLowerCase();
+    const titleLower = sec.title.toLowerCase().trim();
+    // Penalize link-list / "next reads" sections (bullets only, no paragraphs)
     const isLinkList = (titleLower.includes('next read') || titleLower.includes('related') || titleLower.includes('further reading'))
       && sec.paragraphs.length === 0;
-    const penalty = isLinkList ? -200 : 0;
+    // Penalize generic FAQ/summary sections so richer content gets priority
+    const isGeneric = ['faqs', 'faq', 'summary', 'conclusion', 'final thoughts', 'wrap up', 'key takeaways',
+      'common misconceptions', 'myths', 'common questions'].includes(titleLower)
+      || titleLower.includes('misconception') || titleLower.includes('myth');
+    const penalty = isLinkList ? -200 : isGeneric ? -50 : 0;
     return { sec, idx: i, score: textLen + bulletScore + hasImage + posBonus + penalty };
   });
 
@@ -472,17 +492,52 @@ const extractContentSlides = (html, featureImage) => {
   for (const { sec } of selected) {
     if (!sec) continue;
 
-    // Decide: bullets with optional intro, or text-only
+    let title = sec.title;
     let content = '';
     let bullets = null;
-    if (sec.bullets.length >= 2) {
+    const titleLower = title.toLowerCase().trim();
+    const isFaqPattern = ['faqs', 'faq', 'common misconceptions', 'myths', 'common questions'].includes(titleLower)
+      || (titleLower.includes('misconception') || titleLower.includes('myth') || titleLower.includes('faq'));
+    const isFaqSection = isFaqPattern && sec.subHeadings.length >= 2;
+    const hasSubHeadings = sec.subHeadings.length >= 1;
+
+    if (isFaqSection) {
+      // FAQ pattern: H3 = question, following P = answer. Format as Q&A.
+      // Pick the most informative Q&A pair (longest answer)
+      let bestQ = '';
+      let bestA = '';
+      for (const [q, paras] of sec.h3Paragraphs) {
+        const a = paras.join(' ');
+        if (a.length > bestA.length) {
+          bestQ = q;
+          bestA = a;
+        }
+      }
+      if (bestQ && bestA) {
+        // Use the question as the slide title for context
+        title = bestQ.length > MAX_TITLE_LEN
+          ? bestQ.substring(0, MAX_TITLE_LEN).replace(/\s+\S*$/, '').trim() + '?'
+          : bestQ.replace(/\?*$/, '?');
+        content = condenseSentences(bestA, CHAR_LIMIT);
+      } else {
+        // Fallback: use first paragraph
+        content = condenseSentences(sec.paragraphs.join(' '), CHAR_LIMIT);
+      }
+    } else if (sec.bullets.length >= 2) {
       // Adaptive bullet count: long titles (3+ lines at 90px) get fewer bullets to fit safe zone
-      const titleLen = Math.min((sec.title || '').length, MAX_TITLE_LEN);
+      const titleLen = Math.min((title || '').length, MAX_TITLE_LEN);
       const maxBullets = titleLen > BULLET_TITLE_THRESHOLD ? 2 : MAX_BULLETS;
       bullets = sec.bullets.slice(0, maxBullets);
     } else if (sec.bullets.length === 1 && sec.paragraphs.length === 0) {
       // Single bullet with no paragraphs: use bullet text as body content
       content = condenseSentences(sec.bullets[0], CHAR_LIMIT);
+    } else if (hasSubHeadings && sec.paragraphs.length > 0) {
+      // Section with H3 sub-headings: use the paragraphs under the first H3
+      // for more focused content (the H2 section title is already the slide title)
+      const firstH3 = sec.subHeadings[0];
+      const h3Paras = sec.h3Paragraphs.get(firstH3) || [];
+      const paraSource = h3Paras.length > 0 ? h3Paras.join(' ') : sec.paragraphs.join(' ');
+      content = condenseSentences(paraSource, CHAR_LIMIT);
     } else {
       const fullText = sec.paragraphs.join(' ');
       content = condenseSentences(fullText, CHAR_LIMIT);
@@ -494,7 +549,7 @@ const extractContentSlides = (html, featureImage) => {
 
     if (content.length > 10 || (bullets && bullets.length > 0) || isImageSlide) {
       results.push({
-        title: sec.title,
+        title,
         content: isImageSlide ? '' : content,
         bullets: isImageSlide ? null : bullets,
         imageSlide: isImageSlide,
