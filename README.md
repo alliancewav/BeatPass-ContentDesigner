@@ -1,57 +1,79 @@
-# Content Designer
+# BeatPass Content Designer
 
-A self-contained Instagram carousel generator for Ghost CMS blog articles.
+A visual content generation tool for the BeatPass blog. Transforms published blog articles into branded carousel slides and exportable media assets.
+
+**Part of the [BeatPass](https://beatpass.ca) platform.**
+
+---
+
+## Overview
+
+Content Designer connects to the BeatPass blog via the Ghost Content API, pulls article data, and generates professionally styled slide decks optimized for social media distribution. It supports multiple export formats including individual PNGs, ZIP bundles, and video composites.
+
+### Key Features
+
+- Automatic slide generation from blog article content
+- Multiple visual themes with brand-consistent styling
+- PNG, ZIP, and video export pipelines
+- Password-protected access
+- Responsive single-page application
+
+### Tech Stack
+
+- React 18 + Vite
+- Tailwind CSS
+- Ghost Content API integration
+- html2canvas / JSZip / file-saver
+
+### Repository Structure
+
+```
+.
+├── public/            # Static assets (fonts, logos)
+├── src/
+│   ├── components/    # React UI components
+│   ├── lib/           # Core logic (export, slides, themes, API)
+│   ├── styles/        # Tailwind entry point
+│   ├── config.js      # App configuration
+│   ├── App.jsx        # Root component
+│   └── main.jsx       # Entry point
+├── index.html         # SPA shell
+├── vite.config.js     # Vite configuration
+├── tailwind.config.js # Tailwind configuration
+└── package.json       # Dependencies
+```
 
 ## Setup
 
-```bash
-npm install
-npm run dev       # Dev server at http://localhost:5173
-npm run build     # Production build → dist/
-npm run preview   # Preview production build
-```
+1. Clone the repository.
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
+3. Configure the application in `src/config.js` with your Ghost API credentials and branding.
+4. Start the development server:
+   ```bash
+   npm run dev
+   ```
+5. Build for production:
+   ```bash
+   npm run build
+   ```
 
-## Configuration
+## Related
 
-Edit `src/config.js` to customize:
+- **[BeatPass Blog](https://github.com/alliancewav/BeatPass-Blog)** — Ghost CMS blog infrastructure and automation scripts.
+- **[BeatPass](https://beatpass.ca)** — The beat licensing platform.
 
-- **Ghost API** — `ghost.apiUrl` and `ghost.contentApiKey`
-- **Password** — `auth.passwordHash` (SHA-256 hash of your password)
-- **Branding** — `brand.name`, `brand.domain`, logo URLs, favicon
+---
 
-### Changing the password
+## License
 
-Open browser console and run:
+This is proprietary software. All rights reserved by **Alliance Productions Records Inc.**
 
-```js
-crypto.subtle.digest('SHA-256', new TextEncoder().encode('YOUR_NEW_PASSWORD'))
-  .then(h => Array.from(new Uint8Array(h)).map(b => b.toString(16).padStart(2,'0')).join(''))
-  .then(console.log)
-```
+No part of this repository may be copied, modified, distributed, or reused in any form without explicit written permission. See [LICENSE](./LICENSE) for full terms.
 
-Replace the hash in `src/config.js` → `auth.passwordHash`.
+## Contact
 
-## Deployment
-
-**Live URL:** https://blog.beatpass.ca/assets/content-designer/index.html
-
-### Quick deploy (recommended)
-
-```bash
-bash deploy.sh
-```
-
-This builds and copies `dist/` into the Ghost theme's assets directory, making it publicly accessible at the URL above.
-
-### Alternative deployment targets
-
-- **Netlify / Vercel / Cloudflare Pages** — point to this directory, build command: `npm run build`
-- **Standalone** — serve `dist/` with any static file server
-
-## Stack
-
-- Vite + React 18
-- Tailwind CSS 3
-- html2canvas (PNG export)
-- JSZip + file-saver (ZIP export)
-- Ghost Content API (article data)
+Alliance Productions Records Inc.
+Email: contact.alliancewav@gmail.com
