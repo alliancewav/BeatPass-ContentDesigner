@@ -38,10 +38,12 @@ const CONFIG = {
   slides: {
     maxSlides: 10,
     targetContentSlides: { min: 4, max: 7 },
-    contentCharLimit: 280,
-    bulletCharLimit: 160,
+    contentCharLimit: 200,
+    bulletCharLimit: 120,
     maxBulletsPerSlide: 3,
     maxImageSlides: 2,
+    maxTitleLen: 65,
+    bulletTitleThreshold: 36,
     wordsPerMinute: 275,
   },
 };

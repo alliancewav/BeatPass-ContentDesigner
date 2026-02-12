@@ -130,6 +130,7 @@ export async function exportYouTubeVideo({
   width = 1080,
   height = 1350,
   progressBar = null,
+  timerInfo = null,
   accentColor = null,
   onProgress,
   onStatus,
@@ -141,6 +142,7 @@ export async function exportYouTubeVideo({
   if (onStatus) onStatus('Sending to server...');
   const body = { videoId, overlayPng: overlayDataUrl, duration, withAudio, width, height };
   if (progressBar) body.progressBar = progressBar;
+  if (timerInfo) body.timerInfo = timerInfo;
   if (accentColor) body.accentColor = accentColor;
   const res = await fetch(`${VIDEO_API_BASE}/export`, {
     method: 'POST',

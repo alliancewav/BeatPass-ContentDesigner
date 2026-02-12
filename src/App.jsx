@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useLayoutEffect, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useLayoutEffect, useCallback, useMemo } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
@@ -20,7 +20,7 @@ import ThemePicker from './components/ThemePicker';
 import ThumbnailStrip from './components/ThumbnailStrip';
 
 import THEMES from './lib/themes';
-import { getDominantColor, wcagTextColor, ensureContrast, darkenColor, lightenColor } from './lib/utils';
+import { getDominantColor, wcagTextColor, ensureContrast, darkenColor, lightenColor, hslToHex, rgbToHsl } from './lib/utils';
 import { downloadAllAsZip, downloadAllIndividual, captureElement, captureOverlayAsPng } from './lib/exportEngine';
 import { exportSlideAsVideo, getVideoExtension, exportYouTubeVideo } from './lib/videoExport';
 import { fetchSettings } from './lib/ghostApi';
@@ -75,12 +75,21 @@ export default function App() {
   }, []);
 
   // ── Resolve the best color-source image for an article ──
-  // Priority: feature image > YouTube thumbnail from HTML > first slide video thumbnail
+  // For video articles (#video/#video-preview): prefer YouTube thumbnail over edisc feature image
+  // For regular articles: feature image > YouTube thumbnail from HTML > first slide video
   const resolveColorImage = (art, slideList) => {
-    if (art?.featureImage) return art.featureImage;
+    const tags = art?.tags?.map(t => typeof t === 'object' ? t.slug : t) || [];
+    const isVideo = tags.includes('hash-video') || tags.includes('hash-video-preview');
+
     // Extract YouTube ID from article HTML
     const ytMatch = (art?.html || '').match(/youtube\.com\/embed\/([a-zA-Z0-9_-]{11})/);
-    if (ytMatch) return `https://img.youtube.com/vi/${ytMatch[1]}/mqdefault.jpg`;
+    const ytThumb = ytMatch ? `https://img.youtube.com/vi/${ytMatch[1]}/mqdefault.jpg` : null;
+
+    // Video articles: prefer YouTube thumbnail (better color variety than edisc images)
+    if (isVideo && ytThumb) return ytThumb;
+
+    if (art?.featureImage) return art.featureImage;
+    if (ytThumb) return ytThumb;
     // Fall back to first slide with a video URL
     for (const s of (slideList || [])) {
       const vid = (s.videoUrl || '').match(/[?&]v=([a-zA-Z0-9_-]{11})/)?.[1]
@@ -90,44 +99,64 @@ export default function App() {
     return null;
   };
 
+  // ── Memoize the resolved color-source image so effects only fire when the URL changes ──
+  const resolvedColorImage = useMemo(
+    () => resolveColorImage(article, slides),
+    [article?.featureImage, article?.html, article?.tags, slides.map(s => s.videoUrl).join(',')]
+  );
+
   // ── Update cover image when article changes ──
   useEffect(() => {
-    const img = resolveColorImage(article, slides);
-    if (img) setImageCache((prev) => ({ ...prev, cover: prev.cover || img }));
-  }, [article?.featureImage, slides]);
+    const img = article?.featureImage || resolvedColorImage;
+    if (img) setImageCache((prev) => ({ ...prev, cover: img }));
+  }, [article?.featureImage, resolvedColorImage]);
 
   // ── WCAG-compliant dynamic theme from feature/video image ──
+  // Uses HSL-based approach: extracts hue from dominant color, then builds
+  // a professional dark palette that avoids muddy/ugly backgrounds.
   useEffect(() => {
-    const imgSrc = resolveColorImage(article, slides);
+    const imgSrc = resolvedColorImage;
     if (!imgSrc) return;
     (async () => {
       const raw = await getDominantColor(imgSrc);
+      const hsl = rgbToHsl(raw.r, raw.g, raw.b);
 
-      // Darken the vibrant color for a rich, professional bg.
-      const bgHex = darkenColor(raw.hex, 40);
+      // Background: keep hue, cap saturation, force very dark (l ≈ 0.07–0.09)
+      // This avoids muddy yellows/olives — always produces a rich, dark bg
+      const bgSat = Math.min(hsl.s, 0.45);
+      const bgHex = hslToHex(hsl.h, bgSat, 0.08);
 
-      // Derive accent from the extracted color (lightened) for a cohesive palette
-      const rawAccent = lightenColor(raw.hex, 25);
-      const textColor = ensureContrast(bgHex, '#E5E7EB');
-      const accentColor = ensureContrast(bgHex, rawAccent);
-      const mutedColor = ensureContrast(bgHex, lightenColor(raw.hex, 15), 3);
+      // Accent: same hue, boosted saturation, mid lightness for visibility
+      const accentSat = Math.max(hsl.s, 0.55);
+      const accentHex = hslToHex(hsl.h, accentSat, 0.58);
+
+      // Text: always light — guaranteed WCAG AA on dark bg
+      const textColor = '#E5E7EB';
+
+      // Muted: desaturated tint of the hue
+      const mutedHex = hslToHex(hsl.h, 0.15, 0.62);
+
+      // Final WCAG checks
+      const finalAccent = ensureContrast(bgHex, accentHex);
+      const finalMuted = ensureContrast(bgHex, mutedHex, 3);
+      const accentText = ensureContrast(finalAccent, '#0A0A0A');
 
       setDynamicTheme({
         ...THEMES.smartMatch,
         bg: bgHex,
         text: textColor,
-        accent: accentColor,
-        accentBg: accentColor,
-        accentText: ensureContrast(accentColor, '#0A0A0A'),
-        muted: mutedColor,
-        gradient: `linear-gradient(180deg, ${bgHex}, ${darkenColor(bgHex, 15)})`,
+        accent: finalAccent,
+        accentBg: finalAccent,
+        accentText,
+        muted: finalMuted,
+        gradient: `linear-gradient(180deg, ${bgHex}, ${hslToHex(hsl.h, bgSat, 0.04)})`,
         overlayGradient: () =>
           `linear-gradient(to top, ${bgHex} 15%, ${bgHex}E6 45%, transparent 100%)`,
         logoVariant: 'light',
         cardBg: 'rgba(255,255,255,0.06)',
       });
     })();
-  }, [article?.featureImage, article?.html, slides]);
+  }, [resolvedColorImage]);
 
   // ── Responsive scale ──
   useLayoutEffect(() => {
@@ -247,6 +276,7 @@ export default function App() {
         const overlayEl = overlayContainerRef.current;
         if (!overlayEl) throw new Error('Overlay container not ready');
         const progressBar = measureProgressBar(overlayEl);
+        const timerInfo = measureTimerLabel(overlayEl);
         const overlayDataUrl = await captureOverlayAsPng(overlayEl, slideWidth, slideHeight);
 
         setExportStatusMsg(`Exporting video slide ${i + 1}...`);
@@ -258,6 +288,7 @@ export default function App() {
           width: slideWidth,
           height: slideHeight,
           progressBar,
+          timerInfo,
           accentColor: resolvedTheme.accent,
           onProgress: ({ progress }) => setExportProgress({ current: i + 1, total: slides.length }),
           onStatus: (msg) => setExportStatusMsg(`Slide ${i + 1}: ${msg}`),
@@ -309,6 +340,24 @@ export default function App() {
     };
   };
 
+  // Helper: measure elapsed timer label position for ffmpeg drawtext animation
+  const measureTimerLabel = (overlayEl) => {
+    const el = overlayEl?.querySelector('[data-timer-elapsed]');
+    if (!el) return null;
+    const rootRect = overlayEl.getBoundingClientRect();
+    const elRect = el.getBoundingClientRect();
+    // Get computed style for font size and color
+    const style = window.getComputedStyle(el);
+    const parentStyle = window.getComputedStyle(el.parentElement);
+    return {
+      x: Math.round(elRect.left - rootRect.left),
+      y: Math.round(elRect.top - rootRect.top),
+      fontSize: Math.round(parseFloat(style.fontSize)),
+      color: parentStyle.color,
+      opacity: parseFloat(parentStyle.opacity),
+    };
+  };
+
   // Helper: extract YouTube video ID from a slide
   const getYtVideoId = (slide) => {
     const url = slide?.videoUrl || '';
@@ -334,6 +383,7 @@ export default function App() {
         const overlayEl = overlayContainerRef.current;
         if (!overlayEl) throw new Error('Overlay container not ready');
         const progressBar = measureProgressBar(overlayEl);
+        const timerInfo = measureTimerLabel(overlayEl);
         const overlayDataUrl = await captureOverlayAsPng(overlayEl, slideWidth, slideHeight);
 
         const videoUrl = await exportYouTubeVideo({
@@ -344,6 +394,7 @@ export default function App() {
           width: slideWidth,
           height: slideHeight,
           progressBar,
+          timerInfo,
           accentColor: resolvedTheme.accent,
           onProgress: ({ progress }) => setExportProgress({ current: Math.round(progress * 100), total: 100 }),
           onStatus: (msg) => setExportStatusMsg(msg),
@@ -399,6 +450,7 @@ export default function App() {
       const overlayEl = overlayContainerRef.current;
       if (!overlayEl) throw new Error('Overlay container not ready');
       const progressBar = measureProgressBar(overlayEl);
+      const timerInfo = measureTimerLabel(overlayEl);
       const overlayDataUrl = await captureOverlayAsPng(overlayEl, slideWidth, slideHeight);
 
       const videoUrl = await exportYouTubeVideo({
@@ -409,6 +461,7 @@ export default function App() {
         width: slideWidth,
         height: slideHeight,
         progressBar,
+        timerInfo,
         accentColor: resolvedTheme.accent,
         onProgress: ({ progress }) => setExportProgress({ current: Math.round(progress * 100), total: 100 }),
         onStatus: (msg) => setExportStatusMsg(msg),

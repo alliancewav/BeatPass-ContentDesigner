@@ -6,7 +6,8 @@ import CONFIG from '../config';
 
 const { maxSlides: MAX_SLIDES, targetContentSlides: TARGET, contentCharLimit: CHAR_LIMIT,
         bulletCharLimit: BULLET_LIMIT, maxBulletsPerSlide: MAX_BULLETS,
-        maxImageSlides: MAX_IMG_SLIDES } = CONFIG.slides;
+        maxImageSlides: MAX_IMG_SLIDES, maxTitleLen: MAX_TITLE_LEN,
+        bulletTitleThreshold: BULLET_TITLE_THRESHOLD } = CONFIG.slides;
 
 // ── Image Helpers ──
 
@@ -92,8 +93,19 @@ const condenseSentences = (text, limit = CHAR_LIMIT) => {
   // If we got at least one complete sentence, return it without ellipsis
   if (result.trim()) return result.trim();
   // Otherwise truncate at the last word boundary
-  const truncated = text.substring(0, limit).replace(/\s+\S*$/, '');
-  return truncated.trim();
+  const truncated = text.substring(0, limit).replace(/\s+\S*$/, '').trim();
+  return truncated || text.substring(0, limit);
+};
+
+const truncateBullet = (text, limit = BULLET_LIMIT) => {
+  if (text.length <= limit) return text;
+  // Try to end at a sentence boundary within limit
+  const chunk = text.substring(0, limit);
+  const sentenceEnd = chunk.match(/^(.*[.!?])\s/s);
+  if (sentenceEnd && sentenceEnd[1].length > 20) return sentenceEnd[1].trim();
+  // Fall back to word boundary + ellipsis
+  const wordBound = chunk.replace(/\s+\S*$/, '').trim();
+  return (wordBound || chunk) + '…';
 };
 
 const extractBullets = (listNodes) => {
@@ -102,9 +114,10 @@ const extractBullets = (listNodes) => {
     const items = list.querySelectorAll('li');
     for (const li of items) {
       if (bullets.length >= MAX_BULLETS) break;
+      for (const br of li.querySelectorAll('br')) br.replaceWith(' ');
       let t = li.innerText.replace(/\s+/g, ' ').trim();
       if (t.length > 10) {
-        if (t.length > BULLET_LIMIT) t = t.substring(0, BULLET_LIMIT).replace(/\s+\S*$/, '').trim();
+        if (t.length > BULLET_LIMIT) t = truncateBullet(t, BULLET_LIMIT);
         bullets.push(t);
       }
     }
@@ -131,8 +144,13 @@ const parseSections = (doc, featureImage) => {
   const h2s = doc.querySelectorAll('h2');
 
   for (const h2 of h2s) {
+    let rawTitle = h2.innerText.replace(/\s+/g, ' ').trim();
+    // Truncate very long titles at word boundary (max ~65 chars for slide readability)
+    if (rawTitle.length > MAX_TITLE_LEN) {
+      rawTitle = rawTitle.substring(0, MAX_TITLE_LEN).replace(/\s+\S*$/, '').trim() || rawTitle.substring(0, MAX_TITLE_LEN);
+    }
     const section = {
-      title: h2.innerText.replace(/\s+/g, ' ').trim(),
+      title: rawTitle,
       paragraphs: [],
       bullets: [],
       image: null,
@@ -156,6 +174,7 @@ const parseSections = (doc, featureImage) => {
       }
 
       if (node.tagName === 'P') {
+        for (const br of node.querySelectorAll('br')) br.replaceWith(' ');
         const text = node.innerText.replace(/\s+/g, ' ').trim();
         if (text.length > 15) section.paragraphs.push(text);
       }
@@ -399,7 +418,10 @@ const extractContentSlides = (html, featureImage) => {
     // Fallback: collect paragraphs
     const paragraphs = doc.querySelectorAll('p');
     let collected = '';
-    paragraphs.forEach((p) => { collected += ' ' + p.innerText; });
+    for (const p of paragraphs) {
+      for (const br of p.querySelectorAll('br')) br.replaceWith(' ');
+      collected += ' ' + p.innerText;
+    }
     collected = collected.trim();
     if (collected.length > 20) {
       results.push({
@@ -415,24 +437,52 @@ const extractContentSlides = (html, featureImage) => {
     return results;
   }
 
-  // Budget: pick top N sections
+  // Budget: pick top N sections, scored by content richness
   const budget = Math.min(TARGET.max, Math.max(TARGET.min, sections.length));
-  const step = sections.length <= budget ? 1 : sections.length / budget;
+
+  // Score each section: longer paragraphs and more bullets = better content for carousel
+  const scored = sections.map((sec, i) => {
+    const textLen = sec.paragraphs.join(' ').length;
+    const bulletScore = sec.bullets.length * 40;
+    const hasImage = sec.image ? 20 : 0;
+    // Slight bonus for earlier sections (more important context)
+    const posBonus = Math.max(0, 10 - i * 2);
+    // Penalize link-list / "next reads" sections (bullets only, no paragraphs, near end)
+    const titleLower = sec.title.toLowerCase();
+    const isLinkList = (titleLower.includes('next read') || titleLower.includes('related') || titleLower.includes('further reading'))
+      && sec.paragraphs.length === 0;
+    const penalty = isLinkList ? -200 : 0;
+    return { sec, idx: i, score: textLen + bulletScore + hasImage + posBonus + penalty };
+  });
+
+  // If we have more sections than budget, pick the highest-scoring ones
+  // but preserve their original order for narrative flow
+  let selected;
+  if (sections.length <= budget) {
+    selected = scored;
+  } else {
+    const sorted = [...scored].sort((a, b) => b.score - a.score);
+    const topIndices = sorted.slice(0, budget).map(s => s.idx).sort((a, b) => a - b);
+    selected = topIndices.map(i => scored[i]);
+  }
 
   const results = [];
   let imageSlideCount = 0;
 
-  for (let i = 0; i < budget && i < sections.length; i++) {
-    const idx = sections.length <= budget ? i : Math.min(Math.floor(i * step), sections.length - 1);
-    const sec = sections[idx];
+  for (const { sec } of selected) {
     if (!sec) continue;
 
-    // Decide: bullets OR text (never both)
+    // Decide: bullets with optional intro, or text-only
     let content = '';
     let bullets = null;
     if (sec.bullets.length >= 2) {
-      bullets = sec.bullets.slice(0, MAX_BULLETS);
-      // No body text when bullets are present
+      // Adaptive bullet count: long titles (3+ lines at 90px) get fewer bullets to fit safe zone
+      const titleLen = Math.min((sec.title || '').length, MAX_TITLE_LEN);
+      const maxBullets = titleLen > BULLET_TITLE_THRESHOLD ? 2 : MAX_BULLETS;
+      bullets = sec.bullets.slice(0, maxBullets);
+    } else if (sec.bullets.length === 1 && sec.paragraphs.length === 0) {
+      // Single bullet with no paragraphs: use bullet text as body content
+      content = condenseSentences(sec.bullets[0], CHAR_LIMIT);
     } else {
       const fullText = sec.paragraphs.join(' ');
       content = condenseSentences(fullText, CHAR_LIMIT);
@@ -459,7 +509,8 @@ const extractContentSlides = (html, featureImage) => {
     results[0].videoUrl = ytEmbeds[0].url;
   }
 
-  return results;
+  // Safety cap: never exceed maxSlides (minus cover + CTA = 2)
+  return results.slice(0, MAX_SLIDES - 2);
 };
 
 export const createBlankSlide = (type = 'content', number = 1) => {

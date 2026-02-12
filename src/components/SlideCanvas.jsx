@@ -7,8 +7,8 @@ import CONFIG from '../config';
 const L = {
   side: 72,          // horizontal padding
   headerTop: 44,     // header bar y offset
-  contentTop: 140,   // content area starts below header (Instagram top safe: 135px)
-  bottomPad: 140,    // bottom breathing room (Instagram bottom safe: 135px)
+  contentTop: 210,   // content area starts below header (Instagram top safe: ~250px)
+  bottomPad: 260,    // bottom breathing room (Instagram bottom safe: ~280px)
   progressH: 6,      // progress line height
   progressBot: 52,   // progress line from bottom edge
 };
@@ -29,7 +29,11 @@ export default function SlideCanvas({ slide, index, totalSlides, theme, aspectRa
     || null;
   const hasVideoEmbed = !!ytVideoId;
   const hasDarkOverlay = hasImageBg || isImageSlide || hasVideoEmbed;
-  const useWhiteLogo = hasDarkOverlay || theme.logoVariant === 'light';
+
+  // Logo: respect the theme's preferred variant. Cover/CTA slides overlay the bg
+  // color over the image, so the logo must match the theme, not the image.
+  const isDarkTheme = theme.logoVariant === 'light'; // 'light' logo = dark bg theme
+  const useWhiteLogo = isDarkTheme;
   const logoSrc = useWhiteLogo ? imageCache.logoWhite : imageCache.logoBlack;
   const headingFont = "'JetBrains Mono', 'Geist', monospace";
   const bodyFont = "'Roboto', 'Geist', system-ui, -apple-system, sans-serif";
@@ -119,14 +123,14 @@ export default function SlideCanvas({ slide, index, totalSlides, theme, aspectRa
           <img src={logoSrc} alt="" style={{ height: 42, width: 'auto', objectFit: 'contain' }} />
         </div>
         <div style={{
-          backgroundColor: hasDarkOverlay ? 'rgba(0,0,0,0.5)' : theme.text,
-          color: hasDarkOverlay ? '#FFF' : theme.bg,
+          backgroundColor: isDarkTheme ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.7)',
+          color: isDarkTheme ? '#FFF' : '#0F0F0F',
           borderRadius: 9999, padding: '12px 24px',
           display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
           whiteSpace: 'nowrap', flexShrink: 0,
-          backdropFilter: hasDarkOverlay ? 'blur(8px)' : 'none',
+          backdropFilter: 'blur(8px)',
         }}>
-          <span style={{ fontSize: 26, fontWeight: 700, lineHeight: 1, letterSpacing: '-0.01em' }}>
+          <span style={{ fontSize: 28, fontWeight: 700, lineHeight: 1, letterSpacing: '-0.01em' }}>
             {index + 1} / {totalSlides}
           </span>
         </div>
@@ -138,9 +142,12 @@ export default function SlideCanvas({ slide, index, totalSlides, theme, aspectRa
           {imageCache.cover && !overlayOnly && (
             <div style={{ position: 'absolute', inset: 0, zIndex: 0 }}>
               <img src={imageCache.cover} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+              {/* Overlay: light themes need heavier coverage so dark images don't clash */}
               <div style={{
                 position: 'absolute', inset: 0,
-                background: theme.overlayGradient ? theme.overlayGradient(theme.bg) : `linear-gradient(to top, ${theme.bg} 20%, ${theme.bg}E6 50%, transparent 100%)`,
+                background: isDarkTheme
+                  ? (theme.overlayGradient ? theme.overlayGradient(theme.bg) : `linear-gradient(to top, ${theme.bg} 15%, ${theme.bg}E6 45%, transparent 100%)`)
+                  : `linear-gradient(to top, ${theme.bg} 30%, ${theme.bg}F2 55%, ${theme.bg}CC 75%, ${theme.bg}99 100%)`,
               }} />
             </div>
           )}
@@ -152,9 +159,10 @@ export default function SlideCanvas({ slide, index, totalSlides, theme, aspectRa
             <div style={{ width: 80, height: 5, borderRadius: 9999, backgroundColor: theme.accent, marginBottom: 28 }} />
             <h1 style={{
               fontFamily: headingFont,
-              fontSize: isPortrait ? 110 : 95, fontWeight: 800, lineHeight: 1.05,
-              margin: 0, marginBottom: slide.beatCover ? 12 : 24,
-              textShadow: '0 4px 24px rgba(0,0,0,0.3)',
+              fontSize: getCoverTitleFontSize((slide.title || '').length, isPortrait),
+              fontWeight: 800, lineHeight: 1.05,
+              margin: 0, marginBottom: slide.beatCover ? 16 : 28,
+              textShadow: isDarkTheme ? '0 4px 24px rgba(0,0,0,0.3)' : '0 2px 12px rgba(255,255,255,0.5)',
             }}>
               {slide.title}
             </h1>
@@ -317,7 +325,10 @@ export default function SlideCanvas({ slide, index, totalSlides, theme, aspectRa
               fontSize: 27, fontWeight: 500, color: theme.muted, opacity: 0.5,
               fontFamily: 'monospace',
             }}>
-              <span>{overlayOnly ? '0:00' : elapsedFormatted}</span>
+              <span
+                data-timer-elapsed="true"
+                style={overlayOnly ? { color: 'transparent' } : undefined}
+              >{overlayOnly ? '0:00' : elapsedFormatted}</span>
               <span>{totalDurFormatted}</span>
             </div>
           </div>
@@ -332,87 +343,9 @@ export default function SlideCanvas({ slide, index, totalSlides, theme, aspectRa
       )}
 
       {/* ── Content Slide — TEXT (no background image) ── */}
-      {slide.type === 'content' && !isImageSlide && !slide.playerLayout && (
-        <div style={{
-          position: 'relative', zIndex: 10, flex: 1,
-          display: 'flex', flexDirection: 'column', justifyContent: hasVideoEmbed ? 'flex-end' : 'flex-start',
-          padding: `${L.contentTop + 40}px ${L.side}px ${L.bottomPad + 20}px`,
-          boxSizing: 'border-box', height: '100%',
-          overflow: 'hidden',
-        }}>
-          {/* Subtle large section number watermark */}
-          <div style={{
-            position: 'absolute', top: isPortrait ? 180 : 120, right: L.side - 10,
-            fontSize: isPortrait ? 320 : 260, fontWeight: 900, lineHeight: 1,
-            color: theme.text, opacity: 0.04,
-            userSelect: 'none', pointerEvents: 'none', zIndex: 0,
-            fontFamily: headingFont,
-          }}>
-            {String(slide.number || '').padStart(2, '0')}
-          </div>
-
-          {/* Title */}
-          <h2 style={{
-            fontFamily: headingFont,
-            fontSize: isPortrait ? 88 : 74,
-            fontWeight: 700, lineHeight: 1.08,
-            margin: 0, marginBottom: slide.bullets ? 40 : 28,
-            position: 'relative', zIndex: 10,
-          }}>
-            {slide.title}
-          </h2>
-
-          {/* Bullet points (shown only if no body text) */}
-          {slide.bullets && slide.bullets.length > 0 && (
-            <div style={{ position: 'relative', zIndex: 10 }}>
-              {slide.bullets.map((b, i) => {
-                const bulletFontSize = isPortrait ? 44 : 38;
-                const bulletLineH = bulletFontSize * 1.45;
-                const dotSize = 12;
-                const dotTop = (bulletLineH - dotSize) / 2;
-                return (
-                  <div key={i} style={{
-                    display: 'flex', alignItems: 'flex-start', gap: 18,
-                    marginBottom: i < slide.bullets.length - 1 ? 24 : 0,
-                  }}>
-                    <div style={{
-                      width: dotSize, height: dotSize, borderRadius: '50%', flexShrink: 0,
-                      backgroundColor: theme.accent, marginTop: dotTop,
-                    }} />
-                    <span style={{
-                      fontSize: bulletFontSize, fontWeight: 400, lineHeight: 1.45,
-                      color: theme.muted,
-                    }}>
-                      {b}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {/* Body text (shown only if no bullets) */}
-          {slide.content && (!slide.bullets || slide.bullets.length === 0) && (
-            <div style={{ position: 'relative', zIndex: 10 }}>
-              <p style={{
-                fontSize: getContentFontSizePx((slide.content || '').length, isPortrait),
-                fontWeight: 400, lineHeight: 1.5,
-                whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-                color: theme.muted, margin: 0,
-              }}>
-                {slide.content}
-              </p>
-            </div>
-          )}
-
-          {/* Bottom fade for overflow protection */}
-          <div style={{
-            position: 'absolute', bottom: 0, left: 0, right: 0, height: L.bottomPad + 30,
-            background: `linear-gradient(to top, ${theme.bg} 40%, transparent 100%)`,
-            pointerEvents: 'none', zIndex: 15,
-          }} />
-        </div>
-      )}
+      {slide.type === 'content' && !isImageSlide && !slide.playerLayout &&
+        renderContentBody({ slide, isPortrait, hasVideoEmbed, L, theme, headingFont, getContentFontSizePx })
+      }
 
       {/* ── Content Slide — IMAGE (full-bleed with text overlay) ── */}
       {slide.type === 'content' && isImageSlide && (
@@ -425,7 +358,7 @@ export default function SlideCanvas({ slide, index, totalSlides, theme, aspectRa
           {/* Title overlay — short, bold */}
           <h2 style={{
             fontFamily: headingFont,
-            fontSize: isPortrait ? 95 : 80,
+            fontSize: isPortrait ? 100 : 84,
             fontWeight: 700, lineHeight: 1.08,
             margin: 0, position: 'relative', zIndex: 10,
             textShadow: '0 2px 20px rgba(0,0,0,0.5)',
@@ -453,10 +386,12 @@ export default function SlideCanvas({ slide, index, totalSlides, theme, aspectRa
         <div style={{ position: 'relative', zIndex: 10, flex: 1, display: 'flex', flexDirection: 'column', height: '100%' }}>
           {imageCache.cover && (
             <div style={{ position: 'absolute', inset: 0, zIndex: 0 }}>
-              <img src={imageCache.cover} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', opacity: 0.15, filter: 'blur(4px)', display: 'block' }} />
+              <img src={imageCache.cover} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', opacity: isDarkTheme ? 0.25 : 0.12, filter: 'blur(6px)', display: 'block' }} />
               <div style={{
                 position: 'absolute', inset: 0,
-                background: theme.overlayGradient ? theme.overlayGradient(theme.bg) : `linear-gradient(to bottom, ${theme.bg}E6, ${theme.bg})`,
+                background: isDarkTheme
+                  ? `radial-gradient(ellipse at center, ${theme.bg}CC 0%, ${theme.bg} 70%)`
+                  : `radial-gradient(ellipse at center, ${theme.bg}E6 0%, ${theme.bg} 60%)`,
               }} />
             </div>
           )}
@@ -465,40 +400,40 @@ export default function SlideCanvas({ slide, index, totalSlides, theme, aspectRa
             display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
             textAlign: 'center', padding: `${L.contentTop}px ${L.side}px ${L.bottomPad + 20}px`,
           }}>
-            <div style={{ marginBottom: 32 }}>
+            <div style={{ marginBottom: 40 }}>
               <div style={{
-                width: 140, height: 140, borderRadius: '50%',
+                width: 160, height: 160, borderRadius: '50%',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 backgroundColor: theme.accentBg, color: theme.accentText,
-                boxShadow: `0 0 60px ${theme.accentBg}40`,
+                boxShadow: `0 0 80px ${theme.accentBg}50`,
               }}>
-                <ChevronRight size={72} strokeWidth={2.5} />
+                <ChevronRight size={80} strokeWidth={2.5} />
               </div>
             </div>
             <h2 style={{
               fontFamily: headingFont,
-              fontSize: isPortrait ? 80 : 68, fontWeight: 800,
+              fontSize: isPortrait ? 96 : 80, fontWeight: 800,
               lineHeight: 1.05, textTransform: 'uppercase', letterSpacing: '-0.02em',
-              margin: 0, marginBottom: 20,
+              margin: 0, marginBottom: 24,
             }}>
               Read Full<br />Article
             </h2>
-            <div style={{ marginBottom: 32 }}>
+            <div style={{ marginBottom: 36 }}>
               <span style={{
-                fontSize: 28, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase',
-                borderBottom: `3px solid ${theme.accent}`, paddingBottom: 4,
-                color: theme.muted,
+                fontSize: 30, fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase',
+                borderBottom: `3px solid ${theme.accent}`, paddingBottom: 6,
+                color: theme.accent,
               }}>
                 Link in Bio
               </span>
             </div>
             <div style={{
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontFamily: headingFont, fontSize: 27, letterSpacing: '0.08em', textTransform: 'uppercase',
-              padding: '10px 22px', border: `2px solid ${theme.text}`, borderRadius: 9999,
-              opacity: 0.4, color: theme.text,
+              fontFamily: headingFont, fontSize: 28, letterSpacing: '0.08em', textTransform: 'uppercase',
+              padding: '12px 28px', border: `2px solid ${theme.accent}60`, borderRadius: 9999,
+              color: theme.muted,
             }}>
-              <Globe size={22} style={{ marginRight: 8 }} />
+              <Globe size={24} style={{ marginRight: 10 }} />
               <span>{slide.subtitle || CONFIG.brand.domain}</span>
             </div>
           </div>
@@ -509,7 +444,7 @@ export default function SlideCanvas({ slide, index, totalSlides, theme, aspectRa
       <div style={{
         position: 'absolute', bottom: L.progressBot, left: L.side, right: L.side,
         height: L.progressH, borderRadius: 9999, zIndex: 30,
-        backgroundColor: hasDarkOverlay ? 'rgba(255,255,255,0.15)' : `${theme.text}18`,
+        backgroundColor: isDarkTheme ? 'rgba(255,255,255,0.15)' : `${theme.text}18`,
         overflow: 'hidden',
       }}>
         <div style={{
@@ -522,19 +457,126 @@ export default function SlideCanvas({ slide, index, totalSlides, theme, aspectRa
   );
 }
 
+// ── Content body renderer (extracted from inline IIFE for readability) ──
+function renderContentBody({ slide, isPortrait, hasVideoEmbed, L, theme, headingFont, getContentFontSizePx }) {
+  const contentLen = (slide.content || '').length;
+  const bulletCount = (slide.bullets || []).length;
+  const hasBoth = contentLen > 0 && bulletCount > 0;
+  const isShort = !hasVideoEmbed && !hasBoth && contentLen < 120 && bulletCount <= 2;
+
+  return (
+    <div style={{
+      position: 'relative', zIndex: 10, flex: 1,
+      display: 'flex', flexDirection: 'column',
+      justifyContent: hasVideoEmbed ? 'flex-end' : isShort ? 'center' : 'flex-start',
+      padding: `${L.contentTop + 40}px ${L.side}px ${L.bottomPad + 20}px`,
+      boxSizing: 'border-box', height: '100%',
+      overflow: 'hidden',
+    }}>
+      {/* Subtle large section number watermark */}
+      <div style={{
+        position: 'absolute', top: isPortrait ? 250 : 180, right: L.side - 10,
+        fontSize: isPortrait ? 320 : 260, fontWeight: 900, lineHeight: 1,
+        color: theme.text, opacity: 0.04,
+        userSelect: 'none', pointerEvents: 'none', zIndex: 0,
+        fontFamily: headingFont,
+      }}>
+        {String(slide.number || '').padStart(2, '0')}
+      </div>
+
+      {/* Title */}
+      <h2 style={{
+        fontFamily: headingFont,
+        fontSize: isPortrait ? 90 : 78,
+        fontWeight: 700, lineHeight: 1.08,
+        margin: 0, marginBottom: (slide.bullets && slide.bullets.length > 0) ? (slide.content ? 20 : 32) : 24,
+        position: 'relative', zIndex: 10,
+      }}>
+        {slide.title}
+      </h2>
+
+      {/* Body text (standalone when no bullets) */}
+      {slide.content && (
+        <div style={{ position: 'relative', zIndex: 10, marginBottom: (slide.bullets && slide.bullets.length > 0) ? 20 : 0 }}>
+          <p style={{
+            fontSize: (slide.bullets && slide.bullets.length > 0)
+              ? 36
+              : getContentFontSizePx((slide.content || '').length, isPortrait),
+            fontWeight: 400, lineHeight: 1.45,
+            whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+            color: theme.muted, margin: 0,
+          }}>
+            {slide.content}
+          </p>
+        </div>
+      )}
+
+      {/* Bullet points */}
+      {slide.bullets && slide.bullets.length > 0 && (
+        <div style={{ position: 'relative', zIndex: 10 }}>
+          {slide.bullets.map((b, i) => {
+            const bulletFontSize = 36;
+            const bulletLineH = bulletFontSize * 1.4;
+            const dotSize = 12;
+            const dotTop = (bulletLineH - dotSize) / 2;
+            return (
+              <div key={i} style={{
+                display: 'flex', alignItems: 'flex-start', gap: 18,
+                marginBottom: i < slide.bullets.length - 1 ? 22 : 0,
+              }}>
+                <div style={{
+                  width: dotSize, height: dotSize, borderRadius: '50%', flexShrink: 0,
+                  backgroundColor: theme.accent, marginTop: dotTop,
+                }} />
+                <span style={{
+                  fontSize: bulletFontSize, fontWeight: 400, lineHeight: 1.4,
+                  color: theme.muted,
+                }}>
+                  {b}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Bottom fade for overflow protection */}
+      <div style={{
+        position: 'absolute', bottom: 0, left: 0, right: 0, height: L.bottomPad + 40,
+        background: `linear-gradient(to top, ${theme.bg} 40%, transparent 100%)`,
+        pointerEvents: 'none', zIndex: 15,
+      }} />
+    </div>
+  );
+}
+
+// Cover title font size — scales down for longer titles
+function getCoverTitleFontSize(charCount, isPortrait) {
+  if (isPortrait) {
+    if (charCount < 25) return 130;
+    if (charCount < 40) return 110;
+    if (charCount < 60) return 95;
+    if (charCount < 80) return 80;
+    return 72;
+  } else {
+    if (charCount < 25) return 110;
+    if (charCount < 40) return 95;
+    if (charCount < 60) return 80;
+    return 72;
+  }
+}
+
 // Body text font size — Instagram cheatsheet: body 36-60px
 function getContentFontSizePx(textLength, isPortrait) {
   if (isPortrait) {
-    if (textLength < 60) return 56;
-    if (textLength < 120) return 48;
-    if (textLength < 200) return 42;
-    if (textLength < 280) return 38;
+    if (textLength < 60) return 54;
+    if (textLength < 100) return 48;
+    if (textLength < 150) return 42;
     return 36;
   } else {
-    if (textLength < 60) return 52;
-    if (textLength < 120) return 46;
-    if (textLength < 200) return 40;
-    if (textLength < 280) return 36;
-    return 34;
+    if (textLength < 60) return 50;
+    if (textLength < 100) return 44;
+    if (textLength < 150) return 38;
+    return 36;
   }
 }
