@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex, nofollow" />
+    <meta name="googlebot" content="noindex, nofollow" />
+    <title>Content Designer — BeatPass</title>
+    <link rel="icon" type="image/png" href="https://blog.beatpass.ca/content/images/size/w256h256/2026/02/7-1.png" />
+    <!-- Self-hosted fonts — same-origin avoids CORS cssRules errors during export -->
+    <style>
+      /* Geist — UI chrome */
+      @font-face { font-family: 'Geist'; font-style: normal; font-weight: 400; font-display: swap; src: url('./fonts/geist-400.ttf') format('truetype'); }
+      @font-face { font-family: 'Geist'; font-style: normal; font-weight: 500; font-display: swap; src: url('./fonts/geist-500.ttf') format('truetype'); }
+      @font-face { font-family: 'Geist'; font-style: normal; font-weight: 600; font-display: swap; src: url('./fonts/geist-600.ttf') format('truetype'); }
+      @font-face { font-family: 'Geist'; font-style: normal; font-weight: 700; font-display: swap; src: url('./fonts/geist-700.ttf') format('truetype'); }
+      @font-face { font-family: 'Geist'; font-style: normal; font-weight: 800; font-display: swap; src: url('./fonts/geist-800.ttf') format('truetype'); }
+      /* JetBrains Mono — slide headings (matches Ghost blog) */
+      @font-face { font-family: 'JetBrains Mono'; font-style: normal; font-weight: 400; font-display: swap; src: url('./fonts/jetbrains-mono-400.ttf') format('truetype'); }
+      @font-face { font-family: 'JetBrains Mono'; font-style: normal; font-weight: 500; font-display: swap; src: url('./fonts/jetbrains-mono-500.ttf') format('truetype'); }
+      @font-face { font-family: 'JetBrains Mono'; font-style: normal; font-weight: 600; font-display: swap; src: url('./fonts/jetbrains-mono-600.ttf') format('truetype'); }
+      @font-face { font-family: 'JetBrains Mono'; font-style: normal; font-weight: 700; font-display: swap; src: url('./fonts/jetbrains-mono-700.ttf') format('truetype'); }
+      @font-face { font-family: 'JetBrains Mono'; font-style: normal; font-weight: 800; font-display: swap; src: url('./fonts/jetbrains-mono-800.ttf') format('truetype'); }
+      /* Roboto — slide body text (matches Ghost blog) */
+      @font-face { font-family: 'Roboto'; font-style: normal; font-weight: 400; font-display: swap; src: url('./fonts/roboto-400.ttf') format('truetype'); }
+      @font-face { font-family: 'Roboto'; font-style: normal; font-weight: 500; font-display: swap; src: url('./fonts/roboto-500.ttf') format('truetype'); }
+      @font-face { font-family: 'Roboto'; font-style: normal; font-weight: 700; font-display: swap; src: url('./fonts/roboto-700.ttf') format('truetype'); }
+    </style>
+  </head>
+  <body class="bg-neutral-950 text-white antialiased">
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

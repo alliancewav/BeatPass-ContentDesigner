@@ -1,0 +1,17 @@
+node_modules/
+dist/
+.DS_Store
+Thumbs.db
+*.local
+*.log
+
+# ── Credentials ──────────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── IDE ──────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
