@@ -1,47 +1,24 @@
 import React, { useState, useEffect, useRef, useLayoutEffect, useCallback, useMemo } from 'react';
-import {
-  ArrowLeft,
-  ArrowRight,
-  Download,
-  Plus,
-  Trash2,
-  Copy,
-  Loader2,
-  RotateCcw,
-  Package,
-  ChevronDown,
-  Film,
-  ImagePlus,
-  Upload,
-  RotateCw,
-  MessageSquare,
-  Twitter,
-  BookOpen,
-  Layers,
-  Undo2,
-  Redo2,
-  Video,
-  ImageIcon,
-  Menu,
-  X,
-} from 'lucide-react';
+import { ArrowLeft, ArrowRight, Download, Loader2, X, Layers, BookOpen, MessageSquare, Twitter, Headphones } from 'lucide-react';
 
 import PasswordGate from './components/PasswordGate';
 import ArticleFetcher from './components/ArticleFetcher';
 import SlideCanvas from './components/SlideCanvas';
-import ThemePicker from './components/ThemePicker';
 import ThumbnailStrip from './components/ThumbnailStrip';
 import StoryCanvas from './components/StoryCanvas';
+import TopBar from './components/TopBar';
+import EditorSidebar from './components/EditorSidebar';
+import PodcastCanvas, { PODCAST_W, PODCAST_H } from './components/PodcastCanvas';
+import PodcastThumbnail, { THUMB_W, THUMB_H } from './components/PodcastThumbnail';
 
 import THEMES from './lib/themes';
-import { getDominantColor, wcagTextColor, ensureContrast, darkenColor, lightenColor, hslToHex, rgbToHsl } from './lib/utils';
-import { downloadAllAsZip, downloadAllIndividual, captureElement, captureOverlayAsPng } from './lib/exportEngine';
-import { exportSlideAsVideo, getVideoExtension, exportYouTubeVideo } from './lib/videoExport';
+import { getDominantColor, ensureContrast, hslToHex, rgbToHsl } from './lib/utils';
 import { fetchSettings } from './lib/ghostApi';
-import { createBlankSlide, normaliseYouTubeUrl } from './lib/slideGenerator';
+import { createBlankSlide, generateSlides } from './lib/slideGenerator';
 import { generateStories, createBlankStory } from './lib/storyGenerator';
 import { generateCaption } from './lib/captionGenerator';
 import { generateTweet, generateThread } from './lib/tweetGenerator';
+import useExportHandlers from './hooks/useExportHandlers';
 import CONFIG from './config';
 
 export default function App() {
@@ -52,6 +29,7 @@ export default function App() {
   const [slides, setSlides] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [article, setArticle] = useState(null);
+  const [density, setDensity] = useState('balanced');
 
   // Theme state
   const [activeThemeId, setActiveThemeId] = useState('aspectDark');
@@ -68,7 +46,23 @@ export default function App() {
   // Story frames state
   const [storyFrames, setStoryFrames] = useState([]);
   const [currentStoryIndex, setCurrentStoryIndex] = useState(0);
-  const [editorTab, setEditorTab] = useState('slides'); // 'slides' | 'stories' | 'caption' | 'twitter'
+  const [editorTab, setEditorTab] = useState('slides'); // 'slides' | 'stories' | 'caption' | 'twitter' | 'podcast'
+
+  // Podcast state
+  const [podcastMeta, setPodcastMeta] = useState({
+    title: 'BeatPass Podcast',
+    episodeNumber: 1,
+    subtitle: '',
+    guestName: '',
+    audioDuration: 0,
+    coverImage: null,
+  });
+  const [podcastAudioFile, setPodcastAudioFile] = useState(null);
+  const [podcastAudioName, setPodcastAudioName] = useState('');
+  const [podcastPlaying, setPodcastPlaying] = useState(false);
+  const [podcastElapsed, setPodcastElapsed] = useState(0);
+  const podcastAudioRef = useRef(null);
+  const podcastAudioUrlRef = useRef(null);
 
   // Caption & Tweet state
   const [caption, setCaption] = useState({ hook: '', body: '', cta: '', hashtags: '' });
@@ -81,6 +75,7 @@ export default function App() {
   // Undo/Redo history
   const historyRef = useRef([]);
   const historyIndexRef = useRef(-1);
+  const [historyVersion, setHistoryVersion] = useState(0);
   const pushHistory = useCallback((slidesSnapshot) => {
     const h = historyRef.current;
     const idx = historyIndexRef.current;
@@ -89,21 +84,21 @@ export default function App() {
     historyRef.current.push(JSON.parse(JSON.stringify(slidesSnapshot)));
     if (historyRef.current.length > 20) historyRef.current.shift();
     historyIndexRef.current = historyRef.current.length - 1;
+    setHistoryVersion(v => v + 1);
   }, []);
 
-  // Export state
-  const [exporting, setExporting] = useState(false);
-  const [exportProgress, setExportProgress] = useState({ current: 0, total: 0 });
-  const [exportMenuOpen, setExportMenuOpen] = useState(false);
-  // Index specifically for the export container (decoupled from preview)
-  const [exportIndex, setExportIndex] = useState(0);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
   // Refs
   const previewContainerRef = useRef(null);
   const exportContainerRef = useRef(null);
   const overlayContainerRef = useRef(null);
+  const storyExportContainerRef = useRef(null);
+  const podcastExportContainerRef = useRef(null);
+  const podcastExportLitRef = useRef(null);
+  const podcastOverlayContainerRef = useRef(null);
+  const podcastThumbnailRef = useRef(null);
   const [scale, setScale] = useState(0.3);
-  const [exportStatusMsg, setExportStatusMsg] = useState('');
 
   // Image URLs — direct URLs, no base64 conversion (avoids CORS issues)
   const [imageCache, setImageCache] = useState({
@@ -118,6 +113,112 @@ export default function App() {
     activeThemeId === 'smartMatch' && dynamicTheme
       ? dynamicTheme
       : THEMES[activeThemeId] || THEMES.aspectDark;
+
+  // ── Export handlers (extracted hook) ──
+  const exportH = useExportHandlers({
+    slides,
+    currentIndex,
+    storyFrames,
+    currentStoryIndex,
+    editorTab,
+    resolvedTheme,
+    aspectRatio,
+    exportContainerRef,
+    overlayContainerRef,
+    storyExportContainerRef,
+    podcastOverlayContainerRef,
+    podcastExportContainerRef,
+    podcastExportLitRef,
+    podcastAudioFile,
+    podcastMeta,
+    podcastAudioRef,
+    podcastThumbnailRef,
+  });
+
+  // ── Podcast audio playback ──
+  useEffect(() => {
+    // Create Audio element once
+    if (!podcastAudioRef.current) {
+      podcastAudioRef.current = new Audio();
+    }
+    const audio = podcastAudioRef.current;
+
+    // When audio file changes, set new source
+    if (podcastAudioFile) {
+      if (podcastAudioUrlRef.current) URL.revokeObjectURL(podcastAudioUrlRef.current);
+      const url = URL.createObjectURL(podcastAudioFile);
+      podcastAudioUrlRef.current = url;
+      audio.src = url;
+      audio.load();
+      setPodcastPlaying(false);
+      setPodcastElapsed(0);
+    } else {
+      audio.pause();
+      audio.src = '';
+      if (podcastAudioUrlRef.current) { URL.revokeObjectURL(podcastAudioUrlRef.current); podcastAudioUrlRef.current = null; }
+      setPodcastPlaying(false);
+      setPodcastElapsed(0);
+    }
+
+    const onTimeUpdate = () => setPodcastElapsed(audio.currentTime);
+    const onEnded = () => { setPodcastPlaying(false); setPodcastElapsed(0); };
+    audio.addEventListener('timeupdate', onTimeUpdate);
+    audio.addEventListener('ended', onEnded);
+    return () => {
+      audio.removeEventListener('timeupdate', onTimeUpdate);
+      audio.removeEventListener('ended', onEnded);
+    };
+  }, [podcastAudioFile]);
+
+  // Pause podcast audio when switching away from podcast tab or when export starts
+  useEffect(() => {
+    if (editorTab !== 'podcast' && podcastAudioRef.current) {
+      podcastAudioRef.current.pause();
+      setPodcastPlaying(false);
+    }
+  }, [editorTab]);
+
+  // Sync playing state if audio is paused externally (e.g. by export handler)
+  useEffect(() => {
+    const audio = podcastAudioRef.current;
+    if (!audio) return;
+    const onPause = () => setPodcastPlaying(false);
+    const onPlay = () => setPodcastPlaying(true);
+    audio.addEventListener('pause', onPause);
+    audio.addEventListener('play', onPlay);
+    return () => { audio.removeEventListener('pause', onPause); audio.removeEventListener('play', onPlay); };
+  }, [podcastAudioFile]);
+
+  const togglePodcastPlayback = useCallback(() => {
+    const audio = podcastAudioRef.current;
+    if (!audio || !podcastAudioFile) return;
+    if (audio.paused) {
+      audio.play().catch(() => {});
+      setPodcastPlaying(true);
+    } else {
+      audio.pause();
+      setPodcastPlaying(false);
+    }
+  }, [podcastAudioFile]);
+
+  const seekPodcast = useCallback((pct) => {
+    const audio = podcastAudioRef.current;
+    if (!audio || !podcastMeta.audioDuration) return;
+    audio.currentTime = pct * podcastMeta.audioDuration;
+    setPodcastElapsed(audio.currentTime);
+  }, [podcastMeta.audioDuration]);
+
+  // ── Cancel podcast render on browser close/refresh ──
+  useEffect(() => {
+    const onBeforeUnload = () => {
+      if (exportH.podcastJobId) {
+        const blob = new Blob([JSON.stringify({ jobId: exportH.podcastJobId })], { type: 'application/json' });
+        navigator.sendBeacon?.('/video-api/podcast-cancel', blob);
+      }
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [exportH.podcastJobId]);
 
   // ── Fetch Ghost settings on mount (for metadata only — logos are bundled locally) ──
   useEffect(() => {
@@ -163,8 +264,12 @@ export default function App() {
   }, [coverOverride, article?.featureImage, resolvedColorImage]);
 
   // ── WCAG-compliant dynamic theme from feature/video image ──
-  // Uses HSL-based approach: extracts hue from dominant color, then builds
-  // a professional dark palette that avoids muddy/ugly backgrounds.
+  // Extracts hue via median-cut quantization, then builds a dark palette.
+  // Every color pair is verified against WCAG 2.1 contrast requirements:
+  //   text/bg ≥ 4.5:1 (AA normal text)
+  //   muted/bg ≥ 4.5:1 (AA normal text — muted IS body text)
+  //   accent/bg ≥ 3:1 (AA large text / UI components)
+  //   accentText/accentBg ≥ 4.5:1 (AA normal — badge text)
   useEffect(() => {
     const imgSrc = resolvedColorImage;
     if (!imgSrc) return;
@@ -173,24 +278,26 @@ export default function App() {
       const hsl = rgbToHsl(raw.r, raw.g, raw.b);
 
       // Background: keep hue, cap saturation, force very dark (l ≈ 0.07–0.09)
-      // This avoids muddy yellows/olives — always produces a rich, dark bg
       const bgSat = Math.min(hsl.s, 0.45);
       const bgHex = hslToHex(hsl.h, bgSat, 0.08);
 
-      // Accent: same hue, boosted saturation, mid lightness for visibility
-      const accentSat = Math.max(hsl.s, 0.55);
+      // Text: hue-tinted off-white for cohesion — verified AA 4.5:1
+      const textCandidate = hslToHex(hsl.h, 0.08, 0.88);
+      const textColor = ensureContrast(bgHex, textCandidate, 4.5);
+
+      // Accent: same hue, boosted saturation, mid-high lightness
+      const accentSat = Math.max(hsl.s, 0.50);
       const accentHex = hslToHex(hsl.h, accentSat, 0.58);
+      // Accent on bg only needs 3:1 (large text / non-text UI per WCAG 1.4.11)
+      const finalAccent = ensureContrast(bgHex, accentHex, 3);
 
-      // Text: always light — guaranteed WCAG AA on dark bg
-      const textColor = '#E5E7EB';
+      // Muted: desaturated tint — used for body text so needs full 4.5:1
+      const mutedCandidate = hslToHex(hsl.h, 0.12, 0.62);
+      const finalMuted = ensureContrast(bgHex, mutedCandidate, 4.5);
 
-      // Muted: desaturated tint of the hue
-      const mutedHex = hslToHex(hsl.h, 0.15, 0.62);
-
-      // Final WCAG checks
-      const finalAccent = ensureContrast(bgHex, accentHex);
-      const finalMuted = ensureContrast(bgHex, mutedHex, 3);
-      const accentText = ensureContrast(finalAccent, '#0A0A0A');
+      // Accent badge text: needs 4.5:1 against accent background
+      const accentTextCandidate = hslToHex(hsl.h, 0.30, 0.12);
+      const accentText = ensureContrast(finalAccent, accentTextCandidate, 4.5);
 
       setDynamicTheme({
         ...THEMES.smartMatch,
@@ -211,8 +318,9 @@ export default function App() {
 
   // ── Responsive scale ──
   const isStoryView = editorTab === 'stories';
-  const previewW = 1080;
-  const previewH = isStoryView ? 1920 : (aspectRatio === 'portrait' ? 1350 : 1080);
+  const isPodcastView = editorTab === 'podcast';
+  const previewW = isPodcastView ? PODCAST_W : 1080;
+  const previewH = isPodcastView ? PODCAST_H : isStoryView ? 1920 : (aspectRatio === 'portrait' ? 1350 : 1080);
 
   useLayoutEffect(() => {
     const handleResize = () => {
@@ -230,9 +338,10 @@ export default function App() {
   }, [mode, aspectRatio, editorTab, previewH]);
 
   // ── Handlers ──
-  const handleSlidesGenerated = useCallback((newSlides, newArticle) => {
+  const handleSlidesGenerated = useCallback((newSlides, newArticle, newDensity) => {
     setSlides(newSlides);
     setArticle(newArticle);
+    if (newDensity) setDensity(newDensity);
     setCurrentIndex(0);
     setCoverOverride(null);
     setCoverYouTubeId(null);
@@ -249,6 +358,12 @@ export default function App() {
     setTweets(singleTweets);
     setThreadTweets(thread);
     setTweetMode('single');
+    // Auto-populate podcast metadata from article
+    setPodcastMeta(prev => ({
+      ...prev,
+      subtitle: newArticle?.title || '',
+      coverImage: newArticle?.featureImage || null,
+    }));
     setMode('editor');
   }, []);
 
@@ -275,11 +390,29 @@ export default function App() {
     setMode('editor');
   }, []);
 
+  // Regenerate slides from the same article with a new density
+  const handleRegenerate = useCallback((newDensity) => {
+    if (!article) return;
+    const d = newDensity || density;
+    setDensity(d);
+    const newSlides = generateSlides(article, { density: d });
+    setSlides(newSlides);
+    setCurrentIndex(0);
+    // Regenerate companion content
+    setStoryFrames(generateStories(article, newSlides));
+    setCurrentStoryIndex(0);
+    const cap = generateCaption(article, newSlides);
+    setCaption(cap);
+    setTweets(generateTweet(article));
+    setThreadTweets(generateThread(article, newSlides));
+  }, [article, density]);
+
   const handleReset = () => {
     setMode('input');
     setSlides([]);
     setArticle(null);
     setCurrentIndex(0);
+    setDensity('balanced');
     if (coverBlobRef.current) { URL.revokeObjectURL(coverBlobRef.current); coverBlobRef.current = null; }
     setCoverOverride(null);
     setCoverYouTubeId(null);
@@ -291,6 +424,13 @@ export default function App() {
     setCaption({ hook: '', body: '', cta: '', hashtags: '' });
     setTweets([]);
     setThreadTweets([]);
+    setPodcastMeta({ title: 'BeatPass Podcast', episodeNumber: 1, subtitle: '', guestName: '', audioDuration: 0, coverImage: null, waveformPeaks: null });
+    setPodcastAudioFile(null);
+    setPodcastAudioName('');
+    setPodcastPlaying(false);
+    setPodcastElapsed(0);
+    if (podcastAudioRef.current) { podcastAudioRef.current.pause(); podcastAudioRef.current.src = ''; }
+    if (podcastAudioUrlRef.current) { URL.revokeObjectURL(podcastAudioUrlRef.current); podcastAudioUrlRef.current = null; }
   };
 
   // Cover image swap handler — detect YouTube URLs, store video ID + thumbnail
@@ -353,6 +493,7 @@ export default function App() {
   const undo = useCallback(() => {
     if (historyIndexRef.current <= 0) return;
     historyIndexRef.current--;
+    setHistoryVersion(v => v + 1);
     const prev = historyRef.current[historyIndexRef.current];
     if (prev) setSlides(JSON.parse(JSON.stringify(prev)));
   }, []);
@@ -360,6 +501,7 @@ export default function App() {
   const redo = useCallback(() => {
     if (historyIndexRef.current >= historyRef.current.length - 1) return;
     historyIndexRef.current++;
+    setHistoryVersion(v => v + 1);
     const next = historyRef.current[historyIndexRef.current];
     if (next) setSlides(JSON.parse(JSON.stringify(next)));
   }, []);
@@ -432,8 +574,21 @@ export default function App() {
     setStoryFrames(prev => prev.map((s, i) => i === currentStoryIndex ? { ...s, [field]: value } : s));
   }, [currentStoryIndex]);
 
+  /**
+   * Update one or more fields on a slide.
+   * @param {string} id - Slide identifier.
+   * @param {string|Object} field - Property name for single update, or an object
+   *   of { prop: value } pairs for batch updates.
+   * @param {*} [value] - New value when `field` is a string (omit for batch mode).
+   * @example updateSlideField(id, 'title', 'New Title')
+   * @example updateSlideField(id, { title: 'New', subtitle: 'Fields' })
+   */
   const updateSlideField = (id, field, value) => {
-    setSlides((prev) => prev.map((s) => (s.id === id ? { ...s, [field]: value } : s)));
+    if (typeof field === 'object' && value === undefined) {
+      setSlides((prev) => prev.map((s) => (s.id === id ? { ...s, ...field } : s)));
+    } else {
+      setSlides((prev) => prev.map((s) => (s.id === id ? { ...s, [field]: value } : s)));
+    }
   };
 
   const addSlideAfter = () => {
@@ -469,259 +624,6 @@ export default function App() {
     setCurrentIndex(currentIndex + 1);
   };
 
-  // ── Export ──
-  const slideWidth = 1080;
-  const slideHeight = aspectRatio === 'portrait' ? 1350 : 1080;
-
-  const waitForPaint = (ms = 600) => new Promise((r) => {
-    requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, ms)));
-  });
-
-  const handleExportSingle = async () => {
-    setExporting(true);
-    setExportIndex(currentIndex);
-    setExportProgress({ current: 1, total: 1 });
-    try {
-      await waitForPaint();
-      const el = exportContainerRef.current;
-      if (!el) return;
-      const dataUrl = await captureElement(el, slideWidth, slideHeight);
-      const link = document.createElement('a');
-      link.href = dataUrl;
-      link.download = `slide-${String(currentIndex + 1).padStart(2, '0')}.png`;
-      link.click();
-    } finally {
-      setExporting(false);
-    }
-  };
-
-  const handleExportAllZip = async () => {
-    setExporting(true);
-    setExportMenuOpen(false);
-    setExportStatusMsg('');
-    try {
-      const renderAtIndex = async (i) => {
-        setExportIndex(i);
-        setExportProgress({ current: i + 1, total: slides.length });
-        await waitForPaint();
-        return exportContainerRef.current;
-      };
-
-      // YouTube video export callback for ZIP: captures overlay, calls server API, returns blob
-      const ytVideoExportFn = async (slide, i) => {
-        const ytId = getYtVideoId(slide);
-        if (!ytId) throw new Error('No YouTube video ID');
-
-        // Render overlay for this slide
-        setExportIndex(i);
-        await waitForPaint();
-        const overlayEl = overlayContainerRef.current;
-        if (!overlayEl) throw new Error('Overlay container not ready');
-        const progressBar = measureProgressBar(overlayEl);
-        const timerInfo = measureTimerLabel(overlayEl);
-        const overlayDataUrl = await captureOverlayAsPng(overlayEl, slideWidth, slideHeight);
-
-        setExportStatusMsg(`Exporting video slide ${i + 1}...`);
-        const videoUrl = await exportYouTubeVideo({
-          videoId: ytId,
-          overlayDataUrl,
-          duration: 60,
-          withAudio: true,
-          width: slideWidth,
-          height: slideHeight,
-          progressBar,
-          timerInfo,
-          accentColor: resolvedTheme.accent,
-          onProgress: ({ progress }) => setExportProgress({ current: i + 1, total: slides.length }),
-          onStatus: (msg) => setExportStatusMsg(`Slide ${i + 1}: ${msg}`),
-        });
-
-        // Fetch the server-generated MP4 as a blob for the ZIP
-        const res = await fetch(videoUrl);
-        if (!res.ok) throw new Error(`Failed to fetch video: ${res.status}`);
-        return await res.blob();
-      };
-
-      await downloadAllAsZip(renderAtIndex, slides.length, slideWidth, slideHeight, article?.slug || 'carousel', slides, null, ytVideoExportFn);
-    } catch (err) {
-      console.error('ZIP export failed:', err);
-      alert('ZIP export failed: ' + err.message);
-    } finally {
-      setExporting(false);
-      setExportStatusMsg('');
-    }
-  };
-
-  const handleExportAllPngs = async () => {
-    setExporting(true);
-    setExportMenuOpen(false);
-    try {
-      const renderAtIndex = async (i) => {
-        setExportIndex(i);
-        setExportProgress({ current: i + 1, total: slides.length });
-        await waitForPaint();
-        return exportContainerRef.current;
-      };
-      await downloadAllIndividual(renderAtIndex, slides.length, slideWidth, slideHeight);
-    } finally {
-      setExporting(false);
-    }
-  };
-
-  // Helper: measure progress bar track position from overlay container for ffmpeg animation
-  const measureProgressBar = (overlayEl) => {
-    const track = overlayEl?.querySelector('[data-progress-track]');
-    if (!track) return null;
-    const rootRect = overlayEl.getBoundingClientRect();
-    const trackRect = track.getBoundingClientRect();
-    return {
-      x: Math.round(trackRect.left - rootRect.left),
-      y: Math.round(trackRect.top - rootRect.top),
-      w: Math.round(trackRect.width),
-      h: Math.round(trackRect.height),
-    };
-  };
-
-  // Helper: measure elapsed timer label position for ffmpeg drawtext animation
-  const measureTimerLabel = (overlayEl) => {
-    const el = overlayEl?.querySelector('[data-timer-elapsed]');
-    if (!el) return null;
-    const rootRect = overlayEl.getBoundingClientRect();
-    const elRect = el.getBoundingClientRect();
-    // Get computed style for font size and color
-    const style = window.getComputedStyle(el);
-    const parentStyle = window.getComputedStyle(el.parentElement);
-    return {
-      x: Math.round(elRect.left - rootRect.left),
-      y: Math.round(elRect.top - rootRect.top),
-      fontSize: Math.round(parseFloat(style.fontSize)),
-      color: parentStyle.color,
-      opacity: parseFloat(parentStyle.opacity),
-    };
-  };
-
-  // Helper: extract YouTube video ID from a slide
-  const getYtVideoId = (slide) => {
-    const url = slide?.videoUrl || '';
-    return url.match(/[?&]v=([a-zA-Z0-9_-]{11})/)?.[1]
-      || url.match(/youtu\.be\/([a-zA-Z0-9_-]{11})/)?.[1]
-      || null;
-  };
-
-  // Export video (muted, 10s) — uses server-side yt-dlp for YouTube slides
-  const handleExportVideo = async () => {
-    setExporting(true);
-    setExportMenuOpen(false);
-    setExportStatusMsg('');
-    try {
-      const cs = slides[currentIndex];
-      const ytId = getYtVideoId(cs);
-      setExportIndex(currentIndex);
-      setExportProgress({ current: 1, total: 1 });
-      await waitForPaint();
-
-      if (ytId) {
-        // YouTube slide → server-side yt-dlp + ffmpeg composite
-        const overlayEl = overlayContainerRef.current;
-        if (!overlayEl) throw new Error('Overlay container not ready');
-        const progressBar = measureProgressBar(overlayEl);
-        const timerInfo = measureTimerLabel(overlayEl);
-        const overlayDataUrl = await captureOverlayAsPng(overlayEl, slideWidth, slideHeight);
-
-        const videoUrl = await exportYouTubeVideo({
-          videoId: ytId,
-          overlayDataUrl,
-          duration: 10,
-          withAudio: false,
-          width: slideWidth,
-          height: slideHeight,
-          progressBar,
-          timerInfo,
-          accentColor: resolvedTheme.accent,
-          onProgress: ({ progress }) => setExportProgress({ current: Math.round(progress * 100), total: 100 }),
-          onStatus: (msg) => setExportStatusMsg(msg),
-        });
-
-        // Download the server-generated MP4
-        const link = document.createElement('a');
-        link.href = videoUrl;
-        link.download = `slide-${String(currentIndex + 1).padStart(2, '0')}.mp4`;
-        link.click();
-      } else {
-        // Non-YouTube slide → client-side still-frame MP4
-        const el = exportContainerRef.current;
-        if (!el) return;
-        const dataUrl = await captureElement(el, slideWidth, slideHeight);
-        const blob = await exportSlideAsVideo({
-          imageDataUrl: dataUrl,
-          width: slideWidth,
-          height: slideHeight,
-          duration: 10,
-          fps: 30,
-          onProgress: ({ progress }) => setExportProgress({ current: Math.round(progress * 100), total: 100 }),
-        });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `slide-${String(currentIndex + 1).padStart(2, '0')}.${getVideoExtension()}`;
-        link.click();
-        URL.revokeObjectURL(url);
-      }
-    } catch (err) {
-      console.error('Video export failed:', err);
-      alert('Video export failed: ' + err.message);
-    } finally {
-      setExporting(false);
-      setExportStatusMsg('');
-    }
-  };
-
-  // Export video with audio (60s) — YouTube only
-  const handleExportVideoWithAudio = async () => {
-    setExporting(true);
-    setExportMenuOpen(false);
-    setExportStatusMsg('');
-    try {
-      const cs = slides[currentIndex];
-      const ytId = getYtVideoId(cs);
-      if (!ytId) throw new Error('No YouTube video on this slide');
-      setExportIndex(currentIndex);
-      setExportProgress({ current: 1, total: 1 });
-      await waitForPaint();
-
-      const overlayEl = overlayContainerRef.current;
-      if (!overlayEl) throw new Error('Overlay container not ready');
-      const progressBar = measureProgressBar(overlayEl);
-      const timerInfo = measureTimerLabel(overlayEl);
-      const overlayDataUrl = await captureOverlayAsPng(overlayEl, slideWidth, slideHeight);
-
-      const videoUrl = await exportYouTubeVideo({
-        videoId: ytId,
-        overlayDataUrl,
-        duration: 60,
-        withAudio: true,
-        width: slideWidth,
-        height: slideHeight,
-        progressBar,
-        timerInfo,
-        accentColor: resolvedTheme.accent,
-        onProgress: ({ progress }) => setExportProgress({ current: Math.round(progress * 100), total: 100 }),
-        onStatus: (msg) => setExportStatusMsg(msg),
-      });
-
-      const link = document.createElement('a');
-      link.href = videoUrl;
-      link.download = `slide-${String(currentIndex + 1).padStart(2, '0')}-audio.mp4`;
-      link.click();
-    } catch (err) {
-      console.error('Video+audio export failed:', err);
-      alert('Video export failed: ' + err.message);
-    } finally {
-      setExporting(false);
-      setExportStatusMsg('');
-    }
-  };
-
   // ── Auth gate ──
   if (!authenticated) {
     return <PasswordGate onAuthenticated={() => setAuthenticated(true)} />;
@@ -741,416 +643,97 @@ export default function App() {
   const currentSlide = slides[currentIndex];
 
   return (
-    <div className="fixed inset-0 bg-neutral-950 text-white flex flex-col overflow-hidden">
-      {/* Top bar */}
-      <div className="flex-none h-12 md:h-14 border-b border-white/[0.06] flex items-center justify-between px-2 md:px-4 z-30 bg-neutral-950">
-        <div className="flex items-center gap-2 md:gap-3 min-w-0">
-          <button onClick={() => setMobileSidebarOpen(!mobileSidebarOpen)} className="md:hidden p-1.5 rounded-lg text-white/50 hover:text-white/80 hover:bg-white/[0.06] transition-all flex-shrink-0" title="Toggle panel">
-            {mobileSidebarOpen ? <X size={18} /> : <Menu size={18} />}
-          </button>
-          <img src={imageCache.favicon} className="w-5 h-5 md:w-6 md:h-6 rounded flex-shrink-0" alt="" />
-          <span className="text-sm font-semibold text-white/70 hidden sm:inline">Content Designer</span>
-          <span className="text-white/20 hidden md:inline">·</span>
-          <span className="text-xs text-white/30 truncate max-w-[200px] hidden md:inline">{article?.title}</span>
-        </div>
-        <div className="flex items-center gap-1 md:gap-2">
-          <button onClick={undo} className="p-1.5 rounded-lg text-white/30 hover:text-white/70 hover:bg-white/[0.06] transition-all disabled:opacity-15 hidden sm:block" title="Undo (Ctrl+Z)" disabled={historyIndexRef.current <= 0}>
-            <Undo2 size={15} />
-          </button>
-          <button onClick={redo} className="p-1.5 rounded-lg text-white/30 hover:text-white/70 hover:bg-white/[0.06] transition-all disabled:opacity-15 hidden sm:block" title="Redo (Ctrl+Shift+Z)" disabled={historyIndexRef.current >= historyRef.current.length - 1}>
-            <Redo2 size={15} />
-          </button>
-          <div className="w-px h-5 bg-white/[0.06] mx-0.5 hidden sm:block" />
-          <button onClick={handleReset} className="px-2 md:px-3 py-1.5 text-xs font-medium text-white/50 hover:text-white/80 border border-white/[0.08] rounded-lg hover:bg-white/[0.04] transition-all flex items-center gap-1 md:gap-1.5">
-            <RotateCcw size={13} /> <span className="hidden sm:inline">New</span>
-          </button>
-          <div className="relative">
-            <button onClick={() => setExportMenuOpen(!exportMenuOpen)} disabled={exporting} className="px-2.5 md:px-4 py-1.5 text-xs font-semibold bg-white text-neutral-950 rounded-lg hover:bg-white/90 transition-all flex items-center gap-1 md:gap-1.5 disabled:opacity-50">
-              {exporting ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
-              <span className="hidden sm:inline">Export</span> <ChevronDown size={12} />
-            </button>
-            {exportMenuOpen && (
-              <>
-                <div className="fixed inset-0 z-40" onClick={() => setExportMenuOpen(false)} />
-                <div className="absolute right-0 top-full mt-1.5 w-52 bg-neutral-900 border border-white/[0.1] rounded-xl shadow-2xl z-50 overflow-hidden">
-                  <button onClick={handleExportSingle} className="w-full px-4 py-3 text-left text-xs hover:bg-white/[0.06] transition-colors flex items-center gap-2.5">
-                    <Download size={14} className="text-white/40" />
-                    <div><div className="font-medium text-white/80">Current Slide</div><div className="text-white/30 text-[10px]">Download as PNG</div></div>
-                  </button>
-                  <button onClick={handleExportAllZip} className="w-full px-4 py-3 text-left text-xs hover:bg-white/[0.06] transition-colors flex items-center gap-2.5 border-t border-white/[0.06]">
-                    <Package size={14} className="text-white/40" />
-                    <div><div className="font-medium text-white/80">All Slides (ZIP)</div><div className="text-white/30 text-[10px]">Bundle as .zip archive</div></div>
-                  </button>
-                  <button onClick={handleExportAllPngs} className="w-full px-4 py-3 text-left text-xs hover:bg-white/[0.06] transition-colors flex items-center gap-2.5 border-t border-white/[0.06]">
-                    <Download size={14} className="text-white/40" />
-                    <div><div className="font-medium text-white/80">All Slides (PNGs)</div><div className="text-white/30 text-[10px]">Individual file downloads</div></div>
-                  </button>
-                  {currentSlide?.videoUrl && (
-                    <>
-                      <button onClick={handleExportVideo} className="w-full px-4 py-3 text-left text-xs hover:bg-white/[0.06] transition-colors flex items-center gap-2.5 border-t border-white/[0.06]">
-                        <Film size={14} className="text-white/40" />
-                        <div><div className="font-medium text-white/80">Video (Muted)</div><div className="text-white/30 text-[10px]">10s MP4, no audio</div></div>
-                      </button>
-                      <button onClick={handleExportVideoWithAudio} className="w-full px-4 py-3 text-left text-xs hover:bg-white/[0.06] transition-colors flex items-center gap-2.5 border-t border-white/[0.06]">
-                        <Film size={14} className="text-violet-400/70" />
-                        <div><div className="font-medium text-white/80">Video + Audio</div><div className="text-white/30 text-[10px]">60s MP4 with YouTube audio</div></div>
-                      </button>
-                    </>
-                  )}
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      </div>
+    <div className="fixed inset-0 bg-surface text-white flex flex-col overflow-hidden">
+      <TopBar
+        imageCache={imageCache}
+        article={article}
+        mobileSidebarOpen={mobileSidebarOpen}
+        setMobileSidebarOpen={setMobileSidebarOpen}
+        undo={undo}
+        redo={redo}
+        canUndo={historyVersion >= 0 && historyIndexRef.current > 0}
+        canRedo={historyVersion >= 0 && historyIndexRef.current < historyRef.current.length - 1}
+        onOpenShortcuts={() => setShortcutsOpen(true)}
+        onReset={handleReset}
+        exporting={exportH.exporting}
+        exportMenuOpen={exportH.exportMenuOpen}
+        setExportMenuOpen={exportH.setExportMenuOpen}
+        editorTab={editorTab}
+        currentSlide={currentSlide}
+        isCurrentGif={exportH.isCurrentGif}
+        isCurrentYt={exportH.isCurrentYt}
+        onExportSingle={exportH.handleExportSingle}
+        onExportAllZip={exportH.handleExportAllZip}
+        onExportAllPngs={exportH.handleExportAllPngs}
+        onExportVideo={exportH.handleExportVideo}
+        onExportVideoWithAudio={exportH.handleExportVideoWithAudio}
+        onExportStory={exportH.handleExportStory}
+        onExportAllStoriesZip={exportH.handleExportAllStoriesZip}
+        onExportPodcast={exportH.handleExportPodcast}
+        onExportPodcastThumbnail={exportH.handleExportPodcastThumbnail}
+        hasPodcastAudio={!!podcastAudioFile}
+      />
 
       {/* Main editor area */}
       <div className="flex-1 flex overflow-hidden relative">
         {/* ── Mobile sidebar backdrop ── */}
         {mobileSidebarOpen && (
-          <div className="fixed inset-0 bg-black/60 z-30 md:hidden" onClick={() => setMobileSidebarOpen(false)} />
+          <div className="fixed inset-0 bg-black/60 glass-light z-30 md:hidden" onClick={() => setMobileSidebarOpen(false)} />
         )}
 
-        {/* ── Left Sidebar ── */}
-        <div className={`
-          fixed top-12 bottom-0 left-0 z-40 w-[85vw] max-w-[320px] transform transition-transform duration-300 ease-in-out
-          md:relative md:top-auto md:bottom-auto md:inset-auto md:z-auto md:w-72 md:max-w-none md:transform-none
-          flex-none border-r border-white/[0.06] flex flex-col bg-neutral-950
-          ${mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
-        `}>
-          {/* Tab bar */}
-          <div className="flex-none flex border-b border-white/[0.06]">
-            {[
-              { id: 'slides', icon: Layers, label: 'Slides' },
-              { id: 'stories', icon: BookOpen, label: 'Stories' },
-              { id: 'caption', icon: MessageSquare, label: 'Caption' },
-              { id: 'twitter', icon: Twitter, label: 'Twitter' },
-            ].map(({ id, icon: Icon, label }) => (
-              <button
-                key={id}
-                onClick={() => { setEditorTab(id); }}
-                className={`flex-1 py-2.5 text-[10px] font-semibold uppercase tracking-wider flex flex-col items-center gap-1 transition-all ${
-                  editorTab === id ? 'text-white bg-white/[0.04] border-b-2 border-violet-500' : 'text-white/30 hover:text-white/50'
-                }`}
-              >
-                <Icon size={14} />
-                {label}
-              </button>
-            ))}
-          </div>
-
-          <div className="flex-1 overflow-y-auto pb-20 md:pb-4">
-            {/* ── Slides Tab ── */}
-            {editorTab === 'slides' && (
-              <>
-                <div className="p-4 space-y-5 border-b border-white/[0.06]">
-                  <ThemePicker activeThemeId={activeThemeId} onThemeChange={setActiveThemeId} dynamicPreview={dynamicTheme} />
-                  <div className="space-y-2">
-                    <label className="text-[11px] font-semibold uppercase tracking-wider text-white/30">Aspect Ratio</label>
-                    <div className="flex bg-white/[0.04] p-1 rounded-lg">
-                      <button onClick={() => setAspectRatio('square')} className={`flex-1 py-2 text-xs font-semibold rounded-md transition-all ${aspectRatio === 'square' ? 'bg-white/[0.1] text-white' : 'text-white/40 hover:text-white/60'}`}>1:1</button>
-                      <button onClick={() => setAspectRatio('portrait')} className={`flex-1 py-2 text-xs font-semibold rounded-md transition-all ${aspectRatio === 'portrait' ? 'bg-white/[0.1] text-white' : 'text-white/40 hover:text-white/60'}`}>4:5</button>
-                    </div>
-                  </div>
-                  {/* Cover Image Swap */}
-                  <div className="space-y-2">
-                    <label className="text-[11px] font-semibold uppercase tracking-wider text-white/30">Cover Image</label>
-                    {imageCache.cover && (
-                      <div className="rounded-lg overflow-hidden border border-white/[0.06]" style={{ height: 56 }}>
-                        <img src={imageCache.cover} alt="" className="w-full h-full object-cover" />
-                      </div>
-                    )}
-                    <input
-                      type="text"
-                      value={coverInputUrl}
-                      onChange={(e) => handleCoverImageChange(e.target.value)}
-                      placeholder="Image or YouTube URL to override..."
-                      className="w-full px-3 py-2 bg-white/[0.04] border border-white/[0.08] rounded-lg text-xs text-white outline-none focus:border-white/20 transition-colors placeholder:text-white/15"
-                    />
-                    {/* YouTube detected — show video/thumbnail toggle */}
-                    {coverYouTubeId && (
-                      <div className="flex bg-white/[0.04] p-0.5 rounded-lg">
-                        <button onClick={() => setCoverMediaMode('thumbnail')} className={`flex-1 py-1.5 text-[10px] font-semibold rounded-md transition-all flex items-center justify-center gap-1.5 ${coverMediaMode === 'thumbnail' ? 'bg-white/[0.1] text-white' : 'text-white/40 hover:text-white/60'}`}>
-                          <ImageIcon size={11} /> Thumbnail
-                        </button>
-                        <button onClick={() => setCoverMediaMode('video')} className={`flex-1 py-1.5 text-[10px] font-semibold rounded-md transition-all flex items-center justify-center gap-1.5 ${coverMediaMode === 'video' ? 'bg-white/[0.1] text-white' : 'text-white/40 hover:text-white/60'}`}>
-                          <Video size={11} /> Video Autoplay
-                        </button>
-                      </div>
-                    )}
-                    <div className="flex gap-1.5">
-                      <label className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-[10px] font-medium text-white/40 hover:text-white/70 bg-white/[0.04] border border-white/[0.08] rounded-lg cursor-pointer hover:bg-white/[0.06] transition-all">
-                        <Upload size={12} /> Upload File
-                        <input type="file" accept="image/*" onChange={handleCoverFileUpload} className="hidden" />
-                      </label>
-                      {coverOverride && article?.featureImage && (
-                        <button
-                          onClick={() => { setCoverOverride(null); setCoverYouTubeId(null); setCoverMediaMode('thumbnail'); setCoverInputUrl(''); }}
-                          className="flex items-center gap-1 px-2 py-1.5 text-[10px] font-medium text-white/40 hover:text-white/70 bg-white/[0.04] border border-white/[0.08] rounded-lg hover:bg-white/[0.06] transition-all"
-                        >
-                          <RotateCw size={11} /> Reset
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-                <div className="p-4 space-y-4 flex-1">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[11px] font-semibold uppercase tracking-wider text-white/30">Slide {currentIndex + 1} of {slides.length}</span>
-                    <div className="flex gap-1">
-                      <button onClick={addSlideAfter} className="p-1.5 rounded-md hover:bg-white/[0.06] text-white/40 hover:text-white/70 transition-colors" title="Add slide after"><Plus size={14} /></button>
-                      <button onClick={duplicateCurrentSlide} className="p-1.5 rounded-md hover:bg-white/[0.06] text-white/40 hover:text-white/70 transition-colors" title="Duplicate slide"><Copy size={14} /></button>
-                      <button onClick={deleteCurrentSlide} disabled={slides.length <= 2} className="p-1.5 rounded-md hover:bg-red-500/10 text-white/40 hover:text-red-400 transition-colors disabled:opacity-20" title="Delete slide"><Trash2 size={14} /></button>
-                    </div>
-                  </div>
-                  {currentSlide && (
-                    <div className="space-y-3">
-                      <div>
-                        <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Title</label>
-                        <input type="text" value={currentSlide.title || ''} onChange={(e) => updateSlideField(currentSlide.id, 'title', e.target.value)} className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors" />
-                      </div>
-                      {currentSlide.type === 'content' && (
-                        <>
-                          <div>
-                            <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Content</label>
-                            <textarea value={currentSlide.content || ''} onChange={(e) => updateSlideField(currentSlide.id, 'content', e.target.value)} rows={4} className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors resize-none" />
-                            <div className="text-[10px] text-white/20 mt-1 text-right">{(currentSlide.content || '').length} / 200 chars</div>
-                          </div>
-                          <div>
-                            <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 flex items-center gap-2">
-                              Image Slide
-                              <button
-                                onClick={() => updateSlideField(currentSlide.id, 'imageSlide', !currentSlide.imageSlide)}
-                                className={`w-8 h-4 rounded-full transition-colors ${currentSlide.imageSlide ? 'bg-violet-500' : 'bg-white/10'}`}
-                              >
-                                <div className={`w-3 h-3 rounded-full bg-white transition-transform ${currentSlide.imageSlide ? 'translate-x-4' : 'translate-x-0.5'}`} />
-                              </button>
-                            </label>
-                            {currentSlide.imageSlide && (
-                              <>
-                                <input type="text" value={currentSlide.image || ''} onChange={(e) => updateSlideField(currentSlide.id, 'image', e.target.value || null)} placeholder="Image URL (full-bleed bg)" className="w-full mt-1 px-3 py-2 bg-white/[0.04] border border-white/[0.08] rounded-lg text-xs text-white outline-none focus:border-white/20 transition-colors placeholder:text-white/15" />
-                                {currentSlide.image && (
-                                  <div className="mt-1.5 rounded-md overflow-hidden border border-white/[0.06]" style={{ height: 48 }}>
-                                    <img src={currentSlide.image} alt="" className="w-full h-full object-cover" />
-                                  </div>
-                                )}
-                              </>
-                            )}
-                          </div>
-                          <div>
-                            <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Video URL <span className="text-white/15 normal-case">(YouTube or mp4)</span></label>
-                            <div className="flex gap-1.5">
-                              <input
-                                type="text"
-                                value={currentSlide.videoUrl || ''}
-                                onChange={(e) => {
-                                  const raw = e.target.value || null;
-                                  if (raw) {
-                                    const norm = normaliseYouTubeUrl(raw);
-                                    updateSlideField(currentSlide.id, 'videoUrl', norm);
-                                    const ytMatch = norm.match(/[?&]v=([a-zA-Z0-9_-]{11})/);
-                                    if (ytMatch) {
-                                      updateSlideField(currentSlide.id, 'image', `https://img.youtube.com/vi/${ytMatch[1]}/maxresdefault.jpg`);
-                                      updateSlideField(currentSlide.id, 'imageSlide', true);
-                                    }
-                                  } else {
-                                    updateSlideField(currentSlide.id, 'videoUrl', null);
-                                  }
-                                }}
-                                placeholder="https://youtu.be/... or https://...video.mp4"
-                                className="flex-1 px-3 py-2 bg-white/[0.04] border border-white/[0.08] rounded-lg text-xs text-white outline-none focus:border-white/20 transition-colors placeholder:text-white/15"
-                              />
-                              {currentSlide.videoUrl && (
-                                <button onClick={() => { updateSlideField(currentSlide.id, 'videoUrl', null); }} className="px-2 py-1 text-[10px] text-red-400/60 hover:text-red-400 hover:bg-red-500/10 rounded-md transition-colors" title="Remove video">✕</button>
-                              )}
-                            </div>
-                            {currentSlide.videoUrl && /youtube|youtu\.be/i.test(currentSlide.videoUrl) && (
-                              <div className="text-[10px] text-violet-400/60 mt-1">YouTube video detected — thumbnail auto-set</div>
-                            )}
-                          </div>
-                        </>
-                      )}
-                      {(currentSlide.type === 'cover' || currentSlide.type === 'cta') && currentSlide.subtitle !== undefined && (
-                        <div>
-                          <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Subtitle / Tag</label>
-                          <input type="text" value={currentSlide.subtitle || ''} onChange={(e) => updateSlideField(currentSlide.id, 'subtitle', e.target.value)} className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors" />
-                        </div>
-                      )}
-                      {currentSlide.type === 'cover' && (
-                        <div>
-                          <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Reading Time</label>
-                          <input type="text" value={currentSlide.readingTime || ''} onChange={(e) => updateSlideField(currentSlide.id, 'readingTime', e.target.value)} className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors" />
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </>
-            )}
-
-            {/* ── Stories Tab ── */}
-            {editorTab === 'stories' && (
-              <div className="p-4 space-y-4">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-semibold uppercase tracking-wider text-white/30">
-                    Story {currentStoryIndex + 1} of {storyFrames.length}
-                  </span>
-                  <div className="flex gap-1">
-                    <button
-                      onClick={() => {
-                        const ns = createBlankStory('hook');
-                        const nf = [...storyFrames];
-                        nf.splice(currentStoryIndex + 1, 0, ns);
-                        setStoryFrames(nf);
-                        setCurrentStoryIndex(currentStoryIndex + 1);
-                      }}
-                      className="p-1.5 rounded-md hover:bg-white/[0.06] text-white/40 hover:text-white/70 transition-colors" title="Add story frame"
-                    ><Plus size={14} /></button>
-                    <button
-                      onClick={() => {
-                        if (storyFrames.length <= 1) return;
-                        const nf = storyFrames.filter((_, i) => i !== currentStoryIndex);
-                        setStoryFrames(nf);
-                        setCurrentStoryIndex(Math.max(0, currentStoryIndex - 1));
-                      }}
-                      disabled={storyFrames.length <= 1}
-                      className="p-1.5 rounded-md hover:bg-red-500/10 text-white/40 hover:text-red-400 transition-colors disabled:opacity-20" title="Delete story frame"
-                    ><Trash2 size={14} /></button>
-                  </div>
-                </div>
-                {storyFrames[currentStoryIndex] && (
-                    <div className="space-y-3">
-                      <div>
-                        <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Type</label>
-                        <div className="flex bg-white/[0.04] p-1 rounded-lg">
-                          {['hook', 'teaser', 'poll', 'cta'].map(t => (
-                            <button key={t} onClick={() => updateStoryField('type', t)} className={`flex-1 py-1.5 text-[10px] font-semibold rounded-md transition-all capitalize ${storyFrames[currentStoryIndex].type === t ? 'bg-white/[0.1] text-white' : 'text-white/40 hover:text-white/60'}`}>{t}</button>
-                          ))}
-                        </div>
-                      </div>
-                      <div>
-                        <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Headline</label>
-                        <textarea value={storyFrames[currentStoryIndex].headline || ''} onChange={(e) => updateStoryField('headline', e.target.value)} rows={2} className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors resize-none" />
-                      </div>
-                      <div>
-                        <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Subtext</label>
-                        <textarea value={storyFrames[currentStoryIndex].subtext || ''} onChange={(e) => updateStoryField('subtext', e.target.value)} rows={2} className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors resize-none" />
-                      </div>
-                      {storyFrames[currentStoryIndex].type === 'poll' && (
-                        <div>
-                          <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Poll Options</label>
-                          {(storyFrames[currentStoryIndex].pollOptions || ['Yes', 'No']).map((opt, oi) => (
-                            <input key={oi} type="text" value={opt} onChange={(e) => {
-                              const opts = [...(storyFrames[currentStoryIndex].pollOptions || ['Yes', 'No'])];
-                              opts[oi] = e.target.value;
-                              updateStoryField('pollOptions', opts);
-                            }} className="w-full mb-1 px-3 py-2 bg-white/[0.04] border border-white/[0.08] rounded-lg text-xs text-white outline-none focus:border-white/20 transition-colors" />
-                          ))}
-                        </div>
-                      )}
-                      <div>
-                        <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">CTA Label</label>
-                        <input type="text" value={storyFrames[currentStoryIndex].ctaLabel || ''} onChange={(e) => updateStoryField('ctaLabel', e.target.value)} placeholder="Swipe up · See carousel" className="w-full px-3 py-2 bg-white/[0.04] border border-white/[0.08] rounded-lg text-xs text-white outline-none focus:border-white/20 transition-colors placeholder:text-white/15" />
-                      </div>
-                    </div>
-                )}
-              </div>
-            )}
-
-            {/* ── Caption Tab ── */}
-            {editorTab === 'caption' && (
-              <div className="p-4 space-y-4">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-semibold uppercase tracking-wider text-white/30">Instagram Caption</span>
-                  <div className="flex gap-1">
-                    {article && (
-                      <button onClick={() => setCaption(generateCaption(article, slides))} className="p-1.5 rounded-md hover:bg-white/[0.06] text-white/40 hover:text-white/70 transition-colors" title="Regenerate"><RotateCw size={13} /></button>
-                    )}
-                    <button onClick={() => copyToClipboard(`${caption.hook}\n\n${caption.body}\n\n${caption.cta}\n\n${caption.hashtags}`)} className="p-1.5 rounded-md hover:bg-white/[0.06] text-white/40 hover:text-white/70 transition-colors" title="Copy all"><Copy size={13} /></button>
-                  </div>
-                </div>
-                <div>
-                  <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Hook Line</label>
-                  <textarea value={caption.hook} onChange={(e) => setCaption(p => ({ ...p, hook: e.target.value }))} rows={2} className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors resize-none" />
-                </div>
-                <div>
-                  <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Body</label>
-                  <textarea value={caption.body} onChange={(e) => setCaption(p => ({ ...p, body: e.target.value }))} rows={5} className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors resize-none" />
-                </div>
-                <div>
-                  <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">CTA</label>
-                  <textarea value={caption.cta} onChange={(e) => setCaption(p => ({ ...p, cta: e.target.value }))} rows={2} className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors resize-none" />
-                </div>
-                <div>
-                  <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 flex items-center justify-between">
-                    <span>Hashtags</span>
-                    <button onClick={() => copyToClipboard(caption.hashtags)} className="text-white/30 hover:text-white/60 transition-colors" title="Copy hashtags"><Copy size={11} /></button>
-                  </label>
-                  <textarea value={caption.hashtags} onChange={(e) => setCaption(p => ({ ...p, hashtags: e.target.value }))} rows={3} className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-xs text-white/60 outline-none focus:border-white/20 transition-colors resize-none" />
-                </div>
-                <div className="text-[10px] text-white/20 text-right">
-                  {`${caption.hook}\n\n${caption.body}\n\n${caption.cta}\n\n${caption.hashtags}`.length} / 2,200 chars
-                </div>
-              </div>
-            )}
-
-            {/* ── Twitter Tab ── */}
-            {editorTab === 'twitter' && (
-              <div className="p-4 space-y-4">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-semibold uppercase tracking-wider text-white/30">Twitter / X</span>
-                  <div className="flex gap-1">
-                    {article && (
-                      <button onClick={() => {
-                        if (tweetMode === 'single') { const t = generateTweet(article); setTweets(t); }
-                        else { const t = generateThread(article, slides); setThreadTweets(t); }
-                      }} className="p-1.5 rounded-md hover:bg-white/[0.06] text-white/40 hover:text-white/70 transition-colors" title="Regenerate"><RotateCw size={13} /></button>
-                    )}
-                    <button onClick={() => { const active = tweetMode === 'single' ? tweets : threadTweets; copyToClipboard(active.map(t => typeof t === 'string' ? t : t.text).join('\n\n---\n\n')); }} className="p-1.5 rounded-md hover:bg-white/[0.06] text-white/40 hover:text-white/70 transition-colors" title="Copy all"><Copy size={13} /></button>
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <label className="text-[11px] font-semibold uppercase tracking-wider text-white/30">Mode</label>
-                  <div className="flex bg-white/[0.04] p-1 rounded-lg">
-                    <button onClick={() => { setTweetMode('single'); }} className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all ${tweetMode === 'single' ? 'bg-white/[0.1] text-white' : 'text-white/40 hover:text-white/60'}`}>Single</button>
-                    <button onClick={() => { setTweetMode('thread'); }} className={`flex-1 py-1.5 text-xs font-semibold rounded-md transition-all ${tweetMode === 'thread' ? 'bg-white/[0.1] text-white' : 'text-white/40 hover:text-white/60'}`}>Thread</button>
-                  </div>
-                </div>
-                {(tweetMode === 'single' ? tweets : threadTweets).map((tw, i) => {
-                  const text = typeof tw === 'string' ? tw : tw.text;
-                  const setter = tweetMode === 'single' ? setTweets : setThreadTweets;
-                  return (
-                    <div key={i} className="space-y-1">
-                      {tweetMode === 'thread' && <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider">Tweet {i + 1} / {threadTweets.length}</label>}
-                      <textarea
-                        value={text}
-                        onChange={(e) => {
-                          setter(prev => prev.map((t, j) => j === i ? (typeof t === 'string' ? e.target.value : { ...t, text: e.target.value }) : t));
-                        }}
-                        rows={3}
-                        className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors resize-none"
-                      />
-                      <div className="flex items-center justify-between">
-                        <span className={`text-[10px] ${text.length > 280 ? 'text-red-400' : text.length > 260 ? 'text-yellow-400/70' : 'text-white/20'}`}>
-                          {text.length} / 280
-                        </span>
-                        <button onClick={() => copyToClipboard(text)} className="text-[10px] text-white/30 hover:text-white/60 transition-colors">Copy</button>
-                      </div>
-                    </div>
-                  );
-                })}
-                {tweetMode === 'thread' && (
-                  <button
-                    onClick={() => setThreadTweets(prev => [...prev, ''])}
-                    className="w-full py-2 text-xs text-white/30 hover:text-white/60 border border-dashed border-white/[0.08] rounded-lg hover:bg-white/[0.02] transition-all flex items-center justify-center gap-1"
-                  >
-                    <Plus size={12} /> Add Tweet
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
+        <EditorSidebar
+          editorTab={editorTab}
+          setEditorTab={setEditorTab}
+          mobileSidebarOpen={mobileSidebarOpen}
+          activeThemeId={activeThemeId}
+          setActiveThemeId={setActiveThemeId}
+          dynamicTheme={dynamicTheme}
+          aspectRatio={aspectRatio}
+          setAspectRatio={setAspectRatio}
+          density={density}
+          article={article}
+          slides={slides}
+          onRegenerate={handleRegenerate}
+          imageCache={imageCache}
+          coverOverride={coverOverride}
+          coverInputUrl={coverInputUrl}
+          coverYouTubeId={coverYouTubeId}
+          coverMediaMode={coverMediaMode}
+          setCoverMediaMode={setCoverMediaMode}
+          onCoverImageChange={handleCoverImageChange}
+          onCoverFileUpload={handleCoverFileUpload}
+          onCoverReset={() => { setCoverOverride(null); setCoverYouTubeId(null); setCoverMediaMode('thumbnail'); setCoverInputUrl(''); }}
+          currentIndex={currentIndex}
+          currentSlide={currentSlide}
+          onUpdateSlideField={updateSlideField}
+          onAddSlideAfter={addSlideAfter}
+          onDuplicateSlide={duplicateCurrentSlide}
+          onDeleteSlide={deleteCurrentSlide}
+          storyFrames={storyFrames}
+          setStoryFrames={setStoryFrames}
+          currentStoryIndex={currentStoryIndex}
+          setCurrentStoryIndex={setCurrentStoryIndex}
+          onUpdateStoryField={updateStoryField}
+          caption={caption}
+          setCaption={setCaption}
+          tweetMode={tweetMode}
+          setTweetMode={setTweetMode}
+          tweets={tweets}
+          setTweets={setTweets}
+          threadTweets={threadTweets}
+          setThreadTweets={setThreadTweets}
+          copyToClipboard={copyToClipboard}
+          podcastMeta={podcastMeta}
+          setPodcastMeta={setPodcastMeta}
+          podcastAudioFile={podcastAudioFile}
+          setPodcastAudioFile={setPodcastAudioFile}
+          podcastAudioName={podcastAudioName}
+          setPodcastAudioName={setPodcastAudioName}
+          onExportPodcast={exportH.handleExportPodcast}
+          onExportPodcastThumbnail={exportH.handleExportPodcastThumbnail}
+          exporting={exportH.exporting}
+          podcastExporting={exportH.podcastExporting}
+        />
 
         {/* ── Center Preview ── */}
         <div className="flex-1 flex flex-col min-w-0">
@@ -1166,7 +749,7 @@ export default function App() {
                     <SlideCanvas slide={currentSlide} index={currentIndex} totalSlides={slides.length} theme={resolvedTheme} aspectRatio={aspectRatio} imageCache={imageCache} coverYouTubeId={coverYouTubeId} coverMediaMode={coverMediaMode} />
                   </div>
                   <div className="absolute top-2 right-2 opacity-0 hover:opacity-100 transition-opacity z-20">
-                    <button onClick={handleExportSingle} disabled={exporting} className="p-2 bg-black/70 text-white rounded-lg hover:bg-black backdrop-blur-sm border border-white/10" title="Download this slide"><Download size={16} /></button>
+                    <button onClick={exportH.handleExportSingle} disabled={exportH.exporting} className="p-2 bg-black/70 text-white rounded-lg hover:bg-black backdrop-blur-sm border border-white/10" title="Download this slide"><Download size={16} /></button>
                   </div>
                 </div>
                 <button onClick={() => setCurrentIndex(Math.min(slides.length - 1, currentIndex + 1))} disabled={currentIndex === slides.length - 1} className="p-1.5 sm:p-3 bg-white/[0.06] border border-white/[0.08] rounded-full text-white/60 disabled:opacity-20 hover:bg-white/[0.1] transition-all flex-shrink-0"><ArrowRight size={16} /></button>
@@ -1180,8 +763,58 @@ export default function App() {
                   <div className="absolute top-0 left-0 origin-top-left" style={{ width: previewW, height: previewH, transform: `scale(${scale})` }}>
                     <StoryCanvas frame={storyFrames[currentStoryIndex]} index={currentStoryIndex} totalFrames={storyFrames.length} theme={resolvedTheme} imageCache={imageCache} coverOverride={coverOverride} coverYouTubeId={coverYouTubeId} coverMediaMode={coverMediaMode} />
                   </div>
+                  <div className="absolute top-2 right-2 opacity-0 hover:opacity-100 transition-opacity z-20">
+                    <button onClick={exportH.handleExportStory} disabled={exportH.exporting} className="p-2 bg-black/70 text-white rounded-lg hover:bg-black backdrop-blur-sm border border-white/10" title="Download this story"><Download size={16} /></button>
+                  </div>
                 </div>
                 <button onClick={() => setCurrentStoryIndex(Math.min(storyFrames.length - 1, currentStoryIndex + 1))} disabled={currentStoryIndex === storyFrames.length - 1} className="p-1.5 sm:p-3 bg-white/[0.06] border border-white/[0.08] rounded-full text-white/60 disabled:opacity-20 hover:bg-white/[0.1] transition-all flex-shrink-0"><ArrowRight size={16} /></button>
+              </div>
+            )}
+
+            {/* Podcast preview */}
+            {editorTab === 'podcast' && (
+              <div className="z-10 relative px-1 sm:px-0 flex flex-col items-center gap-3">
+                <div className="relative slide-shadow rounded-sm" style={{ width: previewW * scale, height: previewH * scale }}>
+                  <div className="absolute top-0 left-0 origin-top-left" style={{ width: previewW, height: previewH, transform: `scale(${scale})` }}>
+                    <PodcastCanvas theme={resolvedTheme} imageCache={imageCache} podcastMeta={podcastMeta} elapsed={podcastElapsed} />
+                  </div>
+                </div>
+                {/* Mini transport bar */}
+                {podcastAudioFile && (
+                  <div className="flex items-center gap-3 w-full px-4" style={{ maxWidth: previewW * scale }}>
+                    <button
+                      onClick={togglePodcastPlayback}
+                      className="p-2 bg-white/[0.08] border border-white/[0.1] rounded-full text-white/70 hover:bg-white/[0.14] hover:text-white transition-all flex-shrink-0"
+                      title={podcastPlaying ? 'Pause' : 'Play'}
+                    >
+                      {podcastPlaying
+                        ? <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
+                        : <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                      }
+                    </button>
+                    <div
+                      className="flex-1 py-2 cursor-pointer relative group"
+                      onClick={(e) => {
+                        const bar = e.currentTarget.querySelector('[data-seek-track]');
+                        if (!bar) return;
+                        const rect = bar.getBoundingClientRect();
+                        seekPodcast(Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)));
+                      }}
+                    >
+                      <div data-seek-track className="w-full h-2 bg-white/[0.08] rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-violet-500 rounded-full transition-[width] duration-200"
+                          style={{ width: `${podcastMeta.audioDuration > 0 ? (podcastElapsed / podcastMeta.audioDuration) * 100 : 0}%` }}
+                        />
+                      </div>
+                    </div>
+                    <span className="text-[10px] text-white/30 font-mono tabular-nums flex-shrink-0">
+                      {Math.floor(podcastElapsed / 60)}:{String(Math.floor(podcastElapsed % 60)).padStart(2, '0')}
+                      <span className="text-white/15"> / </span>
+                      {Math.floor((podcastMeta.audioDuration || 0) / 60)}:{String(Math.floor((podcastMeta.audioDuration || 0) % 60)).padStart(2, '0')}
+                    </span>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -1193,6 +826,7 @@ export default function App() {
               { id: 'stories', icon: BookOpen, label: 'Stories' },
               { id: 'caption', icon: MessageSquare, label: 'Caption' },
               { id: 'twitter', icon: Twitter, label: 'Twitter' },
+              { id: 'podcast', icon: Headphones, label: 'Podcast' },
             ].map(({ id, icon: Icon, label }) => (
               <button
                 key={id}
@@ -1207,9 +841,14 @@ export default function App() {
             ))}
           </div>
 
-          {/* Thumbnail strip — slides or stories */}
+          {/* Thumbnail strip — slides or stories (hidden on podcast tab) */}
           <div className="flex-none border-t border-white/[0.06] bg-neutral-950/80 px-2 md:px-4 py-1.5 md:py-2">
-            {editorTab === 'stories' ? (
+            {editorTab === 'podcast' ? (
+              <div className="flex items-center justify-center py-2 text-[10px] text-white/20">
+                <Headphones size={12} className="mr-1.5" />
+                1920×1080 HD · Podcast Video
+              </div>
+            ) : editorTab === 'stories' ? (
               <div className="flex gap-1.5 md:gap-2 overflow-x-auto py-1 md:py-2 px-1" style={{ scrollbarWidth: 'none', WebkitOverflowScrolling: 'touch' }}>
                 {storyFrames.map((sf, i) => (
                   <button
@@ -1235,24 +874,24 @@ export default function App() {
         </div>
       </div>
 
-      {/* ── ALWAYS-RENDERED export container ──
+      {/* ── ALWAYS-RENDERED slide export container ──
            Off-screen — html-to-image clones the DOM so visibility isn't needed. */}
       <div
         style={{
           position: 'fixed',
           left: '-9999px',
           top: 0,
-          width: slideWidth,
-          height: slideHeight,
+          width: exportH.slideWidth,
+          height: exportH.slideHeight,
           overflow: 'hidden',
           pointerEvents: 'none',
         }}
       >
-        <div ref={exportContainerRef} style={{ width: slideWidth, height: slideHeight }}>
+        <div ref={exportContainerRef} style={{ width: exportH.slideWidth, height: exportH.slideHeight }}>
           {slides.length > 0 && (
             <SlideCanvas
-              slide={slides[exporting ? exportIndex : currentIndex]}
-              index={exporting ? exportIndex : currentIndex}
+              slide={slides[exportH.exporting ? exportH.exportIndex : currentIndex]}
+              index={exportH.exporting ? exportH.exportIndex : currentIndex}
               totalSlides={slides.length}
               theme={resolvedTheme}
               aspectRatio={aspectRatio}
@@ -1267,15 +906,15 @@ export default function App() {
       <div
         style={{
           position: 'fixed', top: -9999, left: -9999,
-          width: slideWidth, height: slideHeight,
+          width: exportH.slideWidth, height: exportH.slideHeight,
           overflow: 'hidden', pointerEvents: 'none', zIndex: -1,
         }}
       >
-        <div ref={overlayContainerRef} style={{ width: slideWidth, height: slideHeight }}>
+        <div ref={overlayContainerRef} style={{ width: exportH.slideWidth, height: exportH.slideHeight }}>
           {slides.length > 0 && (
             <SlideCanvas
-              slide={slides[exporting ? exportIndex : currentIndex]}
-              index={exporting ? exportIndex : currentIndex}
+              slide={slides[exportH.exporting ? exportH.exportIndex : currentIndex]}
+              index={exportH.exporting ? exportH.exportIndex : currentIndex}
               totalSlides={slides.length}
               theme={resolvedTheme}
               aspectRatio={aspectRatio}
@@ -1287,19 +926,157 @@ export default function App() {
         </div>
       </div>
 
-      {/* ── Export overlay ── */}
-      {exporting && (
+      {/* ── Off-screen story export container (1080×1920) ── */}
+      <div
+        style={{
+          position: 'fixed',
+          left: '-9999px',
+          top: 0,
+          width: exportH.storyWidth,
+          height: exportH.storyHeight,
+          overflow: 'hidden',
+          pointerEvents: 'none',
+        }}
+      >
+        <div ref={storyExportContainerRef} style={{ width: exportH.storyWidth, height: exportH.storyHeight }}>
+          {storyFrames.length > 0 && (
+            <StoryCanvas
+              frame={storyFrames[exportH.exporting ? exportH.storyExportIndex : currentStoryIndex]}
+              index={exportH.exporting ? exportH.storyExportIndex : currentStoryIndex}
+              totalFrames={storyFrames.length}
+              theme={resolvedTheme}
+              imageCache={imageCache}
+              coverOverride={coverOverride}
+              coverYouTubeId={coverYouTubeId}
+              coverMediaMode={coverMediaMode}
+              isExport={true}
+            />
+          )}
+        </div>
+      </div>
+
+      {/* ── Off-screen podcast export container (1920×1080) ── */}
+      <div
+        style={{
+          position: 'fixed', left: '-9999px', top: 0,
+          width: PODCAST_W, height: PODCAST_H,
+          overflow: 'hidden', pointerEvents: 'none',
+        }}
+      >
+        <div ref={podcastExportContainerRef} style={{ width: PODCAST_W, height: PODCAST_H }}>
+          <PodcastCanvas theme={resolvedTheme} imageCache={imageCache} podcastMeta={podcastMeta} isExport={true} />
+        </div>
+      </div>
+
+      {/* ── Off-screen podcast export container — LIT waveform (all bars highlighted) ── */}
+      <div
+        style={{
+          position: 'fixed', left: '-9999px', top: 0,
+          width: PODCAST_W, height: PODCAST_H,
+          overflow: 'hidden', pointerEvents: 'none',
+        }}
+      >
+        <div ref={podcastExportLitRef} style={{ width: PODCAST_W, height: PODCAST_H }}>
+          <PodcastCanvas theme={resolvedTheme} imageCache={imageCache} podcastMeta={podcastMeta} isExport={true} elapsed={podcastMeta.audioDuration || 99999} />
+        </div>
+      </div>
+
+      {/* ── Off-screen podcast overlay container (transparent bg for ffmpeg composite) ── */}
+      <div
+        style={{
+          position: 'fixed', top: -9999, left: -9999,
+          width: PODCAST_W, height: PODCAST_H,
+          overflow: 'hidden', pointerEvents: 'none', zIndex: -1,
+        }}
+      >
+        <div ref={podcastOverlayContainerRef} style={{ width: PODCAST_W, height: PODCAST_H }}>
+          <PodcastCanvas theme={resolvedTheme} imageCache={imageCache} podcastMeta={podcastMeta} isExport={true} overlayOnly={true} />
+        </div>
+      </div>
+
+      {/* ── Off-screen podcast YouTube thumbnail (1280×720) ── */}
+      <div
+        style={{
+          position: 'fixed', left: '-9999px', top: 0,
+          width: THUMB_W, height: THUMB_H,
+          overflow: 'hidden', pointerEvents: 'none',
+        }}
+      >
+        <div ref={podcastThumbnailRef} style={{ width: THUMB_W, height: THUMB_H }}>
+          <PodcastThumbnail theme={resolvedTheme} imageCache={imageCache} podcastMeta={podcastMeta} />
+        </div>
+      </div>
+
+      {/* ── Export overlay (slides/stories only — NOT podcast) ── */}
+      {exportH.exporting && (
         <div className="fixed inset-0 z-[60] bg-neutral-950/90 flex flex-col items-center justify-center backdrop-blur-sm">
           <Loader2 size={48} className="animate-spin mb-4 text-violet-400" />
-          <h2 className="text-lg font-bold text-white">{exportStatusMsg || 'Rendering Slides...'}</h2>
+          <h2 className="text-lg font-bold text-white">{exportH.exportStatusMsg || 'Rendering...'}</h2>
           <p className="text-sm text-white/40 mt-1">
-            {exportProgress.total > 1
-              ? `${exportProgress.current} of ${exportProgress.total}`
-              : exportProgress.current > 1
-                ? `${exportProgress.current}%`
+            {exportH.exportProgress.total > 1
+              ? `${exportH.exportProgress.current} of ${exportH.exportProgress.total}`
+              : exportH.exportProgress.current > 1
+                ? `${exportH.exportProgress.current}%`
                 : ''}
           </p>
         </div>
+      )}
+
+      {/* ── Floating podcast export toast (non-blocking) ── */}
+      {exportH.podcastExporting && (
+        <div className="fixed bottom-6 right-6 z-[55] w-72 bg-neutral-900 border border-white/[0.1] rounded-xl shadow-2xl p-4 animate-fade-in">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <Loader2 size={14} className="animate-spin text-violet-400" />
+              <span className="text-xs font-semibold text-white/80">{exportH.podcastStatusMsg || 'Exporting...'}</span>
+            </div>
+            <button
+              onClick={exportH.cancelPodcastExport}
+              className="p-1 rounded text-white/30 hover:text-white/70 hover:bg-white/[0.06] transition-colors"
+              title="Cancel export"
+            >
+              <X size={12} />
+            </button>
+          </div>
+          <div className="w-full h-1.5 bg-white/[0.06] rounded-full overflow-hidden">
+            <div
+              className="h-full bg-violet-500 rounded-full transition-[width] duration-500"
+              style={{ width: `${exportH.podcastProgress}%` }}
+            />
+          </div>
+          <div className="text-[10px] text-white/25 mt-1.5 text-right">{exportH.podcastProgress}%</div>
+        </div>
+      )}
+
+      {/* ── Keyboard Shortcuts Modal ── */}
+      {shortcutsOpen && (
+        <>
+          <div className="fixed inset-0 z-[70] bg-black/60 glass-light" onClick={() => setShortcutsOpen(false)} />
+          <div className="fixed inset-0 z-[71] flex items-center justify-center p-4 pointer-events-none">
+            <div className="bg-surface-100 border border-border rounded-aspect shadow-2xl w-full max-w-sm pointer-events-auto animate-fade-in">
+              <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+                <h3 className="text-sm font-semibold text-fg-contrast">Keyboard Shortcuts</h3>
+                <button onClick={() => setShortcutsOpen(false)} className="p-1 rounded-aspect-sm text-fg-muted hover:text-fg-contrast hover:bg-surface-200 transition-colors"><X size={16} /></button>
+              </div>
+              <div className="px-5 py-4 space-y-3">
+                {[
+                  ['←  /  →', 'Navigate slides'],
+                  ['Alt + ←  /  →', 'Reorder slide'],
+                  ['Ctrl + Z', 'Undo'],
+                  ['Ctrl + Shift + Z', 'Redo'],
+                ].map(([key, desc]) => (
+                  <div key={key} className="flex items-center justify-between">
+                    <span className="text-xs text-fg">{desc}</span>
+                    <kbd className="text-[10px] font-mono text-fg-secondary bg-surface-200 border border-border px-2 py-1 rounded">{key}</kbd>
+                  </div>
+                ))}
+              </div>
+              <div className="px-5 py-3 border-t border-border">
+                <p className="text-[10px] text-fg-muted">Shortcuts are disabled when a text input is focused.</p>
+              </div>
+            </div>
+          </div>
+        </>
       )}
 
       {/* ── Toast notification ── */}

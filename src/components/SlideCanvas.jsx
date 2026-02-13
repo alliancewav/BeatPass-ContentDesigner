@@ -1,16 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Clock, ChevronRight, Globe, Play, Music } from 'lucide-react';
 import CONFIG from '../config';
+import { computeLayout } from '../lib/layoutEngine';
 
 // ── Layout Constants ──
-// Scaled for iPhone readability (1080px canvas → 393pt screen = 0.364×).
+// Derived from layoutEngine pixel-budget math.
 const L = {
   side: 72,          // horizontal padding
   headerTop: 44,     // header bar y offset
-  contentTop: 210,   // content area starts below header (Instagram top safe: ~250px)
-  bottomPad: 260,    // bottom breathing room (Instagram bottom safe: ~280px)
+  contentTop: 160,   // TOP_CHROME from layoutEngine
+  bottomPad: 120,    // BOT_CHROME from layoutEngine
   progressH: 6,      // progress line height
-  progressBot: 52,   // progress line from bottom edge
+  progressBot: 40,   // progress line from bottom edge
 };
 
 export default function SlideCanvas({ slide, index, totalSlides, theme, aspectRatio, imageCache, isExport = false, overlayOnly = false, coverYouTubeId = null, coverMediaMode = 'thumbnail' }) {
@@ -104,11 +105,15 @@ export default function SlideCanvas({ slide, index, totalSlides, theme, aspectRa
               objectPosition: parallaxPos,
             }}
           />
-          <div style={{
-            position: 'absolute', inset: 0,
-            background: `linear-gradient(to top, ${theme.bg} 10%, ${theme.bg}E6 40%, ${theme.bg}66 65%, transparent 100%)`,
-          }} />
         </div>
+      )}
+      {/* Readability gradient for image slides — rendered in overlay mode too so
+         the PNG sent to ffmpeg includes it (matches the live preview). */}
+      {isImageSlide && (
+        <div style={{
+          position: 'absolute', inset: 0, zIndex: 1,
+          background: `linear-gradient(to top, ${theme.bg} 10%, ${theme.bg}E6 40%, ${theme.bg}66 65%, transparent 100%)`,
+        }} />
       )}
 
       {/* ── Header Bar ── */}
@@ -368,38 +373,64 @@ export default function SlideCanvas({ slide, index, totalSlides, theme, aspectRa
       }
 
       {/* ── Content Slide — IMAGE (full-bleed with text overlay) ── */}
-      {slide.type === 'content' && isImageSlide && (
-        <div style={{
-          position: 'relative', zIndex: 10, flex: 1,
-          display: 'flex', flexDirection: 'column', justifyContent: 'flex-end',
-          padding: `${L.contentTop}px ${L.side}px ${L.bottomPad + 20}px`,
-          boxSizing: 'border-box', height: '100%',
-        }}>
-          {/* Title overlay — short, bold */}
-          <h2 style={{
-            fontFamily: headingFont,
-            fontSize: isPortrait ? 100 : 84,
-            fontWeight: 700, lineHeight: 1.08,
-            margin: 0, position: 'relative', zIndex: 10,
-            textShadow: '0 2px 20px rgba(0,0,0,0.5)',
-            color: '#FFFFFF',
+      {slide.type === 'content' && isImageSlide && (() => {
+        const lo = computeLayout(slide, isPortrait);
+        const hasBullets = slide.bullets && slide.bullets.length > 0;
+        return (
+          <div style={{
+            position: 'relative', zIndex: 10, flex: 1,
+            display: 'flex', flexDirection: 'column', justifyContent: 'flex-end',
+            padding: `${lo.padTop}px ${L.side}px ${lo.padBottom}px`,
+            boxSizing: 'border-box', height: '100%',
+            overflow: 'hidden',
           }}>
-            {slide.title}
-          </h2>
-
-          {/* Optional short caption */}
-          {slide.content && slide.content.length > 0 && (
-            <p style={{
-              fontSize: 36, fontWeight: 400, lineHeight: 1.4,
-              color: 'rgba(255,255,255,0.8)', margin: 0, marginTop: 16,
+            <h2 style={{
+              fontFamily: headingFont,
+              fontSize: lo.titleFontSize,
+              fontWeight: 700, lineHeight: lo.titleLineHeight,
+              margin: 0, marginBottom: 0,
               position: 'relative', zIndex: 10,
-              textShadow: '0 1px 8px rgba(0,0,0,0.4)',
+              textShadow: '0 2px 20px rgba(0,0,0,0.5)',
+              color: '#FFFFFF',
             }}>
-              {slide.content}
-            </p>
-          )}
-        </div>
-      )}
+              {slide.title}
+            </h2>
+
+            <div style={{
+              width: 56, height: lo.accentBarH, borderRadius: 9999,
+              backgroundColor: theme.accent,
+              marginTop: lo.accentMarginTop, marginBottom: lo.accentMarginBottom,
+              position: 'relative', zIndex: 10,
+            }} />
+
+            {slide.content && slide.content.length > 0 && (
+              <p style={{
+                fontSize: hasBullets ? lo.introFontSize : lo.bodyFontSize,
+                fontWeight: 400, lineHeight: hasBullets ? lo.introLineHeight : lo.bodyLineHeight,
+                color: 'rgba(255,255,255,0.85)', margin: 0,
+                marginBottom: hasBullets ? lo.introMarginBottom : 0,
+                position: 'relative', zIndex: 10,
+                textShadow: '0 1px 8px rgba(0,0,0,0.4)',
+              }}>
+                {slide.content}
+              </p>
+            )}
+
+            {renderBullets({
+              bullets: slide.bullets, dotColor: '#FFFFFF',
+              textColor: 'rgba(255,255,255,0.85)', textShadow: '0 1px 8px rgba(0,0,0,0.4)',
+              fontSize: lo.bulletFontSize, lineHeight: lo.bulletLineHeight,
+              gap: lo.bulletGap, dotSize: lo.bulletDotSize,
+            })}
+
+            <div style={{
+              position: 'absolute', bottom: 0, left: 0, right: 0, height: 100,
+              background: `linear-gradient(to top, ${theme.bg} 30%, transparent 100%)`,
+              pointerEvents: 'none', zIndex: 15,
+            }} />
+          </div>
+        );
+      })()}
 
       {/* ── CTA / Outro Slide ── */}
       {slide.type === 'cta' && (
@@ -498,25 +529,138 @@ export default function SlideCanvas({ slide, index, totalSlides, theme, aspectRa
   );
 }
 
-// ── Content body renderer (extracted from inline IIFE for readability) ──
+// ── Content body renderer — pixel-budget-driven layout ──
 function renderContentBody({ slide, isPortrait, hasVideoEmbed, L, theme, headingFont }) {
+  const lo = computeLayout(slide, isPortrait);
   const contentLen = (slide.content || '').length;
   const bulletCount = (slide.bullets || []).length;
   const hasBoth = contentLen > 0 && bulletCount > 0;
-  const isShort = !hasVideoEmbed && !hasBoth && contentLen < 120 && bulletCount <= 2;
 
+  // Detect continuation slides — visually distinct from parent section slides
+  const contRe = /\s*\(cont\.?\)\s*$|\s+continued\s*$/i;
+  const isContinuation = contRe.test(slide.title || '');
+  // Strip continuation suffix for display — show clean title + a "continued" badge instead
+  const strippedTitle = isContinuation
+    ? (slide.title || '').replace(contRe, '').trim() || null
+    : null;
+  const displayTitle = isContinuation && strippedTitle ? strippedTitle : slide.title;
+
+  // Vertical alignment: center on portrait when content is sparse
+  const justify = hasVideoEmbed ? 'flex-end'
+    : isContinuation ? 'flex-end'
+    : lo.verticalAlign === 'center' ? 'center'
+    : 'flex-start';
+
+  // ── Continuation layout: left accent border + bottom-aligned + badge ──
+  if (isContinuation) {
+    return (
+      <div style={{
+        position: 'relative', zIndex: 10, flex: 1,
+        display: 'flex', flexDirection: 'column',
+        justifyContent: justify,
+        padding: `${lo.padTop}px ${L.side}px ${lo.padBottom}px`,
+        boxSizing: 'border-box', height: '100%',
+        overflow: 'hidden',
+      }}>
+        {/* Subtle "continued" watermark instead of number */}
+        <div style={{
+          position: 'absolute', top: isPortrait ? 220 : 160, right: L.side - 10,
+          fontSize: isPortrait ? 140 : 110, fontWeight: 900, lineHeight: 1,
+          color: theme.text, opacity: 0.03,
+          userSelect: 'none', pointerEvents: 'none', zIndex: 0,
+          fontFamily: headingFont, letterSpacing: '-0.04em',
+        }}>
+          cont.
+        </div>
+
+        {/* Left accent border + title row */}
+        <div style={{
+          display: 'flex', alignItems: 'flex-start', gap: 24,
+          marginBottom: lo.accentMarginBottom,
+          position: 'relative', zIndex: 10,
+        }}>
+          {/* Vertical accent bar */}
+          <div style={{
+            width: 5, alignSelf: 'stretch', borderRadius: 9999,
+            backgroundColor: theme.accent, opacity: 0.6, flexShrink: 0,
+          }} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            {/* Continued badge */}
+            <div style={{
+              display: 'inline-flex', alignItems: 'center', gap: 8,
+              backgroundColor: `${theme.accent}15`,
+              border: `1.5px solid ${theme.accent}30`,
+              borderRadius: 9999, padding: '6px 18px',
+              marginBottom: 16,
+            }}>
+              <span style={{
+                fontSize: 22, fontWeight: 700, letterSpacing: '0.08em',
+                textTransform: 'uppercase', color: theme.accent,
+              }}>
+                Continued
+              </span>
+            </div>
+            {/* Title — smaller than primary slide */}
+            <h2 style={{
+              fontFamily: headingFont,
+              fontSize: Math.round(lo.titleFontSize * 0.85),
+              fontWeight: 600, lineHeight: lo.titleLineHeight,
+              margin: 0, color: theme.muted,
+            }}>
+              {displayTitle}
+            </h2>
+          </div>
+        </div>
+
+        {/* Body text */}
+        {slide.content && (
+          <div style={{ position: 'relative', zIndex: 10, marginBottom: bulletCount > 0 ? lo.introMarginBottom : 0 }}>
+            <p style={{
+              fontSize: hasBoth ? lo.introFontSize : lo.bodyFontSize,
+              fontWeight: 400,
+              lineHeight: hasBoth ? lo.introLineHeight : lo.bodyLineHeight,
+              whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+              color: theme.muted, margin: 0,
+            }}>
+              {slide.content}
+            </p>
+          </div>
+        )}
+
+        {/* Bullet points */}
+        {renderBullets({
+          bullets: slide.bullets,
+          dotColor: theme.accent,
+          textColor: theme.muted,
+          fontSize: lo.bulletFontSize,
+          lineHeight: lo.bulletLineHeight,
+          gap: lo.bulletGap,
+          dotSize: lo.bulletDotSize,
+        })}
+
+        {/* Bottom fade for overflow protection */}
+        <div style={{
+          position: 'absolute', bottom: 0, left: 0, right: 0, height: 100,
+          background: `linear-gradient(to top, ${theme.bg} 30%, transparent 100%)`,
+          pointerEvents: 'none', zIndex: 15,
+        }} />
+      </div>
+    );
+  }
+
+  // ── Standard content layout ──
   return (
     <div style={{
       position: 'relative', zIndex: 10, flex: 1,
       display: 'flex', flexDirection: 'column',
-      justifyContent: hasVideoEmbed ? 'flex-end' : isShort ? 'center' : 'flex-start',
-      padding: `${L.contentTop + 40}px ${L.side}px ${L.bottomPad + 20}px`,
+      justifyContent: justify,
+      padding: `${lo.padTop}px ${L.side}px ${lo.padBottom}px`,
       boxSizing: 'border-box', height: '100%',
       overflow: 'hidden',
     }}>
       {/* Subtle large section number watermark */}
       <div style={{
-        position: 'absolute', top: isPortrait ? 250 : 180, right: L.side - 10,
+        position: 'absolute', top: isPortrait ? 220 : 160, right: L.side - 10,
         fontSize: isPortrait ? 320 : 260, fontWeight: 900, lineHeight: 1,
         color: theme.text, opacity: 0.04,
         userSelect: 'none', pointerEvents: 'none', zIndex: 0,
@@ -528,22 +672,29 @@ function renderContentBody({ slide, isPortrait, hasVideoEmbed, L, theme, heading
       {/* Title */}
       <h2 style={{
         fontFamily: headingFont,
-        fontSize: isPortrait ? 90 : 78,
-        fontWeight: 700, lineHeight: 1.08,
-        margin: 0, marginBottom: (slide.bullets && slide.bullets.length > 0) ? (slide.content ? 20 : 32) : 24,
+        fontSize: lo.titleFontSize,
+        fontWeight: 700, lineHeight: lo.titleLineHeight,
+        margin: 0, marginBottom: 0,
         position: 'relative', zIndex: 10,
       }}>
         {slide.title}
       </h2>
 
-      {/* Body text (standalone when no bullets) */}
+      {/* Accent divider bar — visual hierarchy between title and body */}
+      <div style={{
+        width: 56, height: lo.accentBarH, borderRadius: 9999,
+        backgroundColor: theme.accent,
+        marginTop: lo.accentMarginTop, marginBottom: lo.accentMarginBottom,
+        position: 'relative', zIndex: 10,
+      }} />
+
+      {/* Body text */}
       {slide.content && (
-        <div style={{ position: 'relative', zIndex: 10, marginBottom: (slide.bullets && slide.bullets.length > 0) ? 20 : 0 }}>
+        <div style={{ position: 'relative', zIndex: 10, marginBottom: bulletCount > 0 ? lo.introMarginBottom : 0 }}>
           <p style={{
-            fontSize: (slide.bullets && slide.bullets.length > 0)
-              ? 36
-              : getContentFontSizePx((slide.content || '').length, isPortrait),
-            fontWeight: 400, lineHeight: 1.45,
+            fontSize: hasBoth ? lo.introFontSize : lo.bodyFontSize,
+            fontWeight: 400,
+            lineHeight: hasBoth ? lo.introLineHeight : lo.bodyLineHeight,
             whiteSpace: 'pre-wrap', wordBreak: 'break-word',
             color: theme.muted, margin: 0,
           }}>
@@ -553,40 +704,51 @@ function renderContentBody({ slide, isPortrait, hasVideoEmbed, L, theme, heading
       )}
 
       {/* Bullet points */}
-      {slide.bullets && slide.bullets.length > 0 && (
-        <div style={{ position: 'relative', zIndex: 10 }}>
-          {slide.bullets.map((b, i) => {
-            const bulletFontSize = 36;
-            const bulletLineH = bulletFontSize * 1.4;
-            const dotSize = 12;
-            const dotTop = (bulletLineH - dotSize) / 2;
-            return (
-              <div key={i} style={{
-                display: 'flex', alignItems: 'flex-start', gap: 18,
-                marginBottom: i < slide.bullets.length - 1 ? 22 : 0,
-              }}>
-                <div style={{
-                  width: dotSize, height: dotSize, borderRadius: '50%', flexShrink: 0,
-                  backgroundColor: theme.accent, marginTop: dotTop,
-                }} />
-                <span style={{
-                  fontSize: bulletFontSize, fontWeight: 400, lineHeight: 1.4,
-                  color: theme.muted,
-                }}>
-                  {b}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      )}
+      {renderBullets({
+        bullets: slide.bullets,
+        dotColor: theme.accent,
+        textColor: theme.muted,
+        fontSize: lo.bulletFontSize,
+        lineHeight: lo.bulletLineHeight,
+        gap: lo.bulletGap,
+        dotSize: lo.bulletDotSize,
+      })}
 
       {/* Bottom fade for overflow protection */}
       <div style={{
-        position: 'absolute', bottom: 0, left: 0, right: 0, height: L.bottomPad + 40,
-        background: `linear-gradient(to top, ${theme.bg} 40%, transparent 100%)`,
+        position: 'absolute', bottom: 0, left: 0, right: 0, height: 100,
+        background: `linear-gradient(to top, ${theme.bg} 30%, transparent 100%)`,
         pointerEvents: 'none', zIndex: 15,
       }} />
+    </div>
+  );
+}
+
+// ── Shared bullet list renderer — sizes from layoutEngine ──
+function renderBullets({ bullets, dotColor, textColor, textShadow, fontSize = 36, lineHeight = 1.45, gap = 20, dotSize = 12 }) {
+  if (!bullets || bullets.length === 0) return null;
+  const bulletLineH = fontSize * lineHeight;
+  const dotTop = (bulletLineH - dotSize) / 2;
+  return (
+    <div style={{ position: 'relative', zIndex: 10 }}>
+      {bullets.map((b, i) => (
+        <div key={i} style={{
+          display: 'flex', alignItems: 'flex-start', gap: 18,
+          marginBottom: i < bullets.length - 1 ? gap : 0,
+        }}>
+          <div style={{
+            width: dotSize, height: dotSize, borderRadius: '50%', flexShrink: 0,
+            backgroundColor: dotColor, marginTop: dotTop,
+          }} />
+          <span style={{
+            fontSize, fontWeight: 400, lineHeight,
+            color: textColor,
+            ...(textShadow ? { textShadow } : {}),
+          }}>
+            {b}
+          </span>
+        </div>
+      ))}
     </div>
   );
 }
@@ -607,17 +769,4 @@ function getCoverTitleFontSize(charCount, isPortrait) {
   }
 }
 
-// Body text font size — Instagram cheatsheet: body 36-60px
-function getContentFontSizePx(textLength, isPortrait) {
-  if (isPortrait) {
-    if (textLength < 60) return 54;
-    if (textLength < 100) return 48;
-    if (textLength < 150) return 42;
-    return 36;
-  } else {
-    if (textLength < 60) return 50;
-    if (textLength < 100) return 44;
-    if (textLength < 150) return 38;
-    return 36;
-  }
-}
+// Body text font size is now computed by layoutEngine.computeLayout()

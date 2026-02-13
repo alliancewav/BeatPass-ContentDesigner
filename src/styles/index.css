@@ -18,11 +18,11 @@
     background: transparent;
   }
   ::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.15);
+    background: rgb(107 107 107 / 50%);
     border-radius: 3px;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: rgba(255, 255, 255, 0.25);
+    background: rgb(147 147 147 / 60%);
   }
 }
 
@@ -34,8 +34,12 @@
     backdrop-filter: blur(20px) saturate(180%);
     -webkit-backdrop-filter: blur(20px) saturate(180%);
   }
+  .glass-light {
+    backdrop-filter: blur(12px) saturate(150%);
+    -webkit-backdrop-filter: blur(12px) saturate(150%);
+  }
   .animate-fade-in {
-    animation: fadeIn 0.2s ease-out;
+    animation: fade-in 0.2s ease-out;
   }
   .scrollbar-none {
     scrollbar-width: none;
@@ -57,7 +61,7 @@
   }
 }
 
-@keyframes fadeIn {
+@keyframes fade-in {
   from {
     opacity: 0;
     transform: translateY(8px);

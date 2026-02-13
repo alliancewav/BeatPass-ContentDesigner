@@ -1,5 +1,7 @@
 import React, { useRef, useEffect } from 'react';
+import { AlertTriangle } from 'lucide-react';
 import SlideCanvas from './SlideCanvas';
+import { computeLayout } from '../lib/layoutEngine';
 
 export default function ThumbnailStrip({ slides, currentIndex, onSelect, theme, aspectRatio, imageCache }) {
   const containerRef = useRef(null);
@@ -54,6 +56,16 @@ export default function ThumbnailStrip({ slides, currentIndex, onSelect, theme, 
               imageCache={imageCache}
             />
           </div>
+          {slide.type === 'content' && !slide.playerLayout && (() => {
+            const lo = computeLayout(slide, isPortrait);
+            return lo.fillRatio > 1.0 ? (
+              <div className="absolute -top-1 -right-1 z-10" title={`Content overflows (${Math.round(lo.fillRatio * 100)}% fill)`}>
+                <div className="w-4 h-4 rounded-full bg-amber-500 flex items-center justify-center shadow-sm">
+                  <AlertTriangle size={9} className="text-black" strokeWidth={3} />
+                </div>
+              </div>
+            ) : null;
+          })()}
         </button>
       ))}
     </div>

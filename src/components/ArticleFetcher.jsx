@@ -1,13 +1,20 @@
 import React, { useState } from 'react';
-import { Link, ArrowRight, AlertCircle, Loader2, PenLine } from 'lucide-react';
+import { Link, ArrowRight, AlertCircle, Loader2, PenLine, Zap, Scale, BookOpen } from 'lucide-react';
 import { fetchPostByUrl, parsePostToArticle } from '../lib/ghostApi';
 import { generateSlides } from '../lib/slideGenerator';
 import CONFIG from '../config';
+
+const DENSITY_OPTIONS = [
+  { id: 'concise',  icon: Zap,      label: 'Concise',  desc: '3–5 slides' },
+  { id: 'balanced', icon: Scale,     label: 'Balanced', desc: '6–12 slides' },
+  { id: 'detailed', icon: BookOpen,  label: 'Detailed', desc: '9–16 slides' },
+];
 
 export default function ArticleFetcher({ onSlidesGenerated, onStartBlank }) {
   const [url, setUrl] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [density, setDensity] = useState('balanced');
 
   const handleGenerate = async () => {
     if (!url.trim()) return;
@@ -17,8 +24,8 @@ export default function ArticleFetcher({ onSlidesGenerated, onStartBlank }) {
     try {
       const post = await fetchPostByUrl(url);
       const article = parsePostToArticle(post);
-      const slides = generateSlides(article);
-      onSlidesGenerated(slides, article);
+      const slides = generateSlides(article, { density });
+      onSlidesGenerated(slides, article, density);
     } catch (err) {
       setError(err.message || 'Failed to fetch article. Check the URL and try again.');
     } finally {
@@ -40,6 +47,28 @@ export default function ArticleFetcher({ onSlidesGenerated, onStartBlank }) {
           <p className="text-sm text-white/40 max-w-sm mx-auto">
             Generate carousel slides, stories, captions &amp; tweets from a {CONFIG.brand.name} article — or start from scratch.
           </p>
+        </div>
+
+        {/* Density selector */}
+        <div className="mb-6">
+          <label className="text-[11px] font-semibold uppercase tracking-wider text-white/30 mb-2.5 block">Carousel Density</label>
+          <div className="flex bg-white/[0.04] p-1 rounded-xl border border-white/[0.06]">
+            {DENSITY_OPTIONS.map(({ id, icon: Icon, label, desc }) => (
+              <button
+                key={id}
+                onClick={() => setDensity(id)}
+                className={`flex-1 py-2.5 px-2 rounded-lg text-center transition-all flex flex-col items-center gap-1 ${
+                  density === id
+                    ? 'bg-white/[0.1] text-white shadow-sm'
+                    : 'text-white/35 hover:text-white/55'
+                }`}
+              >
+                <Icon size={14} />
+                <span className="text-[11px] font-semibold">{label}</span>
+                <span className={`text-[9px] ${density === id ? 'text-white/50' : 'text-white/20'}`}>{desc}</span>
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* From Article */}
@@ -90,7 +119,7 @@ export default function ArticleFetcher({ onSlidesGenerated, onStartBlank }) {
 
         {/* Start Blank */}
         <button
-          onClick={() => typeof onStartBlank === 'function' && onStartBlank()}
+          onClick={() => onStartBlank()}
           className="w-full py-4 bg-white/[0.04] border border-white/[0.08] text-white/70 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 hover:bg-white/[0.08] hover:text-white hover:border-white/[0.15] transition-all"
         >
           <PenLine size={16} /> Start Blank

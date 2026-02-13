@@ -7,6 +7,37 @@ import { toPng, toBlob } from 'html-to-image';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
 
+// Transparent 1×1 PNG data URI — used as fallback when an image can't be fetched
+const TRANSPARENT_PX = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQIHWNgAAIABQABNjN9GQAAAAlwSFlzAAAWJQAAFiUBSVIk8AAAAA0lEQVQI12NgYGBgAAAABQABXvMqOgAAAABJRU5ErkJggg==';
+
+// Fetch a blob with CORS fallback: try direct cors fetch, then no-cors proxy, then give up
+const fetchBlobWithFallback = async (url) => {
+  // 1. Try direct CORS fetch
+  try {
+    const res = await fetch(url, { mode: 'cors' });
+    if (res.ok) return await res.blob();
+  } catch { /* CORS blocked — try proxy */ }
+
+  // 2. Try same-origin image proxy (video-api or a simple relay)
+  try {
+    const proxyUrl = `/video-api/image-proxy?url=${encodeURIComponent(url)}`;
+    const res = await fetch(proxyUrl);
+    if (res.ok) return await res.blob();
+  } catch { /* proxy unavailable */ }
+
+  return null;
+};
+
+const blobToDataUri = (blob) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onerror = () => reject(new Error('Failed to read blob'));
+  reader.onloadend = () => {
+    if (reader.result) resolve(reader.result);
+    else reject(new Error('FileReader returned null result'));
+  };
+  reader.readAsDataURL(blob);
+});
+
 // Convert any cross-origin <img> elements to inline data URIs
 // so the foreignObject serialization doesn't hit CORS errors.
 const inlineImages = async (element) => {
@@ -19,16 +50,20 @@ const inlineImages = async (element) => {
       if (imgUrl.origin === window.location.origin) return;
     } catch { return; }
     try {
-      const res = await fetch(img.src, { mode: 'cors' });
-      const blob = await res.blob();
-      const dataUri = await new Promise((resolve) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve(reader.result);
-        reader.readAsDataURL(blob);
-      });
-      img.src = dataUri;
+      const blob = await fetchBlobWithFallback(img.src);
+      if (blob && blob.size > 0 && blob.type !== 'text/html') {
+        const dataUri = await blobToDataUri(blob);
+        if (dataUri && dataUri.startsWith('data:image')) {
+          img.src = dataUri;
+          return;
+        }
+      }
+      // If all fetches failed, replace with transparent pixel so export doesn't crash
+      console.warn('Replacing unreachable image with transparent pixel:', img.src);
+      img.src = TRANSPARENT_PX;
     } catch (err) {
-      console.warn('Failed to inline image:', img.src, err);
+      console.warn('Failed to inline image, using transparent fallback:', img.src, err);
+      img.src = TRANSPARENT_PX;
     }
   });
   await Promise.all(promises);
@@ -121,7 +156,50 @@ export const downloadSingleSlide = async (element, width, height, filename) => {
   link.click();
 };
 
-export const downloadAllAsZip = async (renderSlideAtIndex, totalSlides, width, height, slugName, slides = [], videoExportFn = null, ytVideoExportFn = null) => {
+// Strip Ghost image CDN transforms (e.g. /size/w300/format/webp/) to get the raw original URL.
+// Ghost converts GIFs to WebP when these transforms are present, losing animation.
+export const stripGhostImageTransforms = (url) => {
+  if (!url) return url;
+  try {
+    const u = new URL(url);
+    // Ghost pattern: /content/images/size/{spec}/format/{fmt}/YYYY/MM/file.ext
+    // Strip /size/.../ and /format/.../ segments (plus trailing slash) to get /content/images/YYYY/MM/file.ext
+    u.pathname = u.pathname
+      .replace(/\/size\/[^/]+\/?/, '/')
+      .replace(/\/format\/[^/]+\/?/, '/')
+      .replace(/\/{2,}/g, '/');
+    return u.href;
+  } catch { return url; }
+};
+
+// Detect if a URL points to a GIF (by extension, path segment, or known CDN patterns)
+export const isGifUrl = (url) => {
+  if (!url) return false;
+  try {
+    const u = new URL(url, window.location.origin);
+    const lower = u.pathname.toLowerCase();
+    // Direct .gif extension (with or without query params)
+    if (lower.endsWith('.gif')) return true;
+    // .gif as a path segment (e.g. /image.gif/variant or /image.gif?params)
+    if (/\.gif(?=\/|\?|$)/.test(lower)) return true;
+    // Known GIF CDN hostnames
+    const host = u.hostname.toLowerCase();
+    if (host.includes('giphy.com') || host.includes('tenor.com')) return true;
+    return false;
+  } catch { return false; }
+};
+
+export const downloadAllAsZip = async ({
+  renderSlideAtIndex,
+  totalSlides,
+  width,
+  height,
+  slugName,
+  slides = [],
+  videoExportFn = null,
+  ytVideoExportFn = null,
+  gifToMp4Fn = null,
+} = {}) => {
   const zip = new JSZip();
   const folder = zip.folder(slugName || 'carousel');
 
@@ -132,6 +210,7 @@ export const downloadAllAsZip = async (renderSlideAtIndex, totalSlides, width, h
     const paddedIndex = String(i + 1).padStart(2, '0');
     const slide = slides[i];
     const hasYtVideo = slide?.videoUrl && ytVideoExportFn;
+    const hasGifImage = slide?.imageSlide && isGifUrl(slide?.image);
 
     if (hasYtVideo) {
       // YouTube video slide → server-side yt-dlp + ffmpeg (60s, with audio)
@@ -143,6 +222,16 @@ export const downloadAllAsZip = async (renderSlideAtIndex, totalSlides, width, h
         const blob = await captureElementAsBlob(element, width, height);
         folder.file(`slide-${paddedIndex}.png`, blob);
       }
+    } else if (hasGifImage && gifToMp4Fn) {
+      // GIF image slide → capture as still-frame MP4 for Instagram compatibility
+      try {
+        const mp4Blob = await gifToMp4Fn(element, i, width, height);
+        folder.file(`slide-${paddedIndex}.mp4`, mp4Blob);
+      } catch (err) {
+        console.warn(`GIF→MP4 export failed for slide ${i + 1}, falling back to PNG:`, err);
+        const blob = await captureElementAsBlob(element, width, height);
+        folder.file(`slide-${paddedIndex}.png`, blob);
+      }
     } else {
       // Static slide → PNG
       const blob = await captureElementAsBlob(element, width, height);
@@ -151,7 +240,7 @@ export const downloadAllAsZip = async (renderSlideAtIndex, totalSlides, width, h
   }
 
   const zipBlob = await zip.generateAsync({ type: 'blob' });
-  saveAs(zipBlob, `${slugName || 'carousel'}-slides.zip`);
+  saveAs(zipBlob, `${slugName || 'carousel'}.zip`);
 };
 
 export const downloadAllIndividual = async (renderSlideAtIndex, totalSlides, width, height) => {

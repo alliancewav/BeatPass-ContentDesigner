@@ -10,7 +10,7 @@ let _counter = 0;
 const uid = (prefix) => {
   _counter++;
   if (typeof crypto !== 'undefined' && crypto.randomUUID) return `${prefix}-${crypto.randomUUID()}`;
-  return `${prefix}-${Date.now()}-${_counter}-${Math.random().toString(36).substr(2, 6)}`;
+  return `${prefix}-${Date.now()}-${_counter}-${Math.random().toString(36).slice(2, 8)}`;
 };
 
 // ── Hook templates — icon names instead of emojis ──
@@ -52,8 +52,13 @@ const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 
 const truncate = (text, limit) => {
   if (!text || text.length <= limit) return text || '';
-  const cut = text.substring(0, limit).replace(/\s+\S*$/, '').trim();
-  return (cut || text.substring(0, limit)) + '…';
+  // Prefer ending at a sentence boundary within limit
+  const chunk = text.substring(0, limit);
+  const sentenceEnd = chunk.match(/^(.*[.!?])\s/s);
+  if (sentenceEnd && sentenceEnd[1].length > 20) return sentenceEnd[1].trim();
+  // Fall back to word boundary — no ellipsis (preserves context)
+  const cut = chunk.replace(/\s+\S*$/, '').trim();
+  return cut || chunk;
 };
 
 export const generateStories = (article, slides = []) => {
@@ -77,6 +82,7 @@ export const generateStories = (article, slides = []) => {
     ctaLabel: '',
     ctaIcon: null,
     pollOptions: null,
+    swipeHint: 'Swipe for more',
   });
 
   // 2. Teaser frame — key insight from excerpt
@@ -120,19 +126,32 @@ export const generateStories = (article, slides = []) => {
     ctaLabel: ctaTpl.label,
     ctaIcon: ctaTpl.ctaIcon,
     pollOptions: null,
+    domain: CONFIG.brand.domain,
   });
 
   return frames;
 };
 
+const blankStoryDefaults = {
+  headline:    { hook: 'Your headline here', cta: 'New Post!' },
+  icon:        { hook: 'flame', cta: 'megaphone', poll: 'messageCircle' },
+  ctaLabel:    { cta: 'Link in bio' },
+  ctaIcon:     { cta: 'link2' },
+  pollOptions: { poll: ['Option A', 'Option B'] },
+  swipeHint:   { hook: 'Swipe for more' },
+  domain:      { cta: CONFIG.brand.domain },
+};
+
 export const createBlankStory = (type = 'hook') => ({
   id: uid('story-blank'),
   type,
-  headline: type === 'hook' ? 'Your headline here' : type === 'cta' ? 'New Post!' : 'Your content',
+  headline: blankStoryDefaults.headline[type] || 'Your content',
   subtext: type === 'cta' ? 'Check out our latest content' : '',
-  icon: type === 'hook' ? 'flame' : type === 'cta' ? 'megaphone' : type === 'poll' ? 'messageCircle' : 'lightbulb',
+  icon: blankStoryDefaults.icon[type] || 'lightbulb',
   image: null,
-  ctaLabel: type === 'cta' ? 'Link in bio' : '',
-  ctaIcon: type === 'cta' ? 'link2' : null,
-  pollOptions: type === 'poll' ? ['Option A', 'Option B'] : null,
+  ctaLabel: blankStoryDefaults.ctaLabel[type] || '',
+  ctaIcon: blankStoryDefaults.ctaIcon[type] || null,
+  pollOptions: blankStoryDefaults.pollOptions[type] || null,
+  swipeHint: blankStoryDefaults.swipeHint[type] || '',
+  domain: blankStoryDefaults.domain[type] || '',
 });

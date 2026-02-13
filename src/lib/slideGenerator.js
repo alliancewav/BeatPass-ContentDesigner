@@ -3,11 +3,17 @@
 // "Mini landing page" style: clean text slides + max 2 dedicated image slides.
 
 import CONFIG from '../config';
+import { LIMITS, getLimitsForDensity, DENSITY_PRESETS } from './layoutEngine';
 
-const { maxSlides: MAX_SLIDES, targetContentSlides: TARGET, contentCharLimit: CHAR_LIMIT,
-        bulletCharLimit: BULLET_LIMIT, maxBulletsPerSlide: MAX_BULLETS,
-        maxImageSlides: MAX_IMG_SLIDES, maxTitleLen: MAX_TITLE_LEN,
-        bulletTitleThreshold: BULLET_TITLE_THRESHOLD } = CONFIG.slides;
+const { maxImageSlides: MAX_IMG_SLIDES } = CONFIG.slides;
+
+// Default content limits (balanced density) — used as fallback
+const CHAR_LIMIT        = LIMITS.contentCharLimit;
+const BULLET_INTRO_LIMIT = LIMITS.bulletIntroCharLimit;
+const BULLET_LIMIT      = LIMITS.bulletCharLimit;
+const MAX_BULLETS       = LIMITS.maxBulletsNoIntro;
+const MAX_BULLETS_INTRO = LIMITS.maxBulletsWithIntro;
+const MAX_TITLE_LEN     = LIMITS.maxTitleLen;
 
 // ── Image Helpers ──
 
@@ -103,9 +109,9 @@ const truncateBullet = (text, limit = BULLET_LIMIT) => {
   const chunk = text.substring(0, limit);
   const sentenceEnd = chunk.match(/^(.*[.!?])\s/s);
   if (sentenceEnd && sentenceEnd[1].length > 20) return sentenceEnd[1].trim();
-  // Fall back to word boundary + ellipsis
+  // Fall back to word boundary — no ellipsis (preserves context for carousel slides)
   const wordBound = chunk.replace(/\s+\S*$/, '').trim();
-  return (wordBound || chunk) + '…';
+  return wordBound || chunk;
 };
 
 const extractBullets = (listNodes) => {
@@ -113,7 +119,6 @@ const extractBullets = (listNodes) => {
   for (const list of listNodes) {
     const items = list.querySelectorAll('li');
     for (const li of items) {
-      if (bullets.length >= MAX_BULLETS) break;
       for (const br of li.querySelectorAll('br')) br.replaceWith(' ');
       let t = li.innerText.replace(/\s+/g, ' ').trim();
       if (t.length > 10) {
@@ -156,12 +161,16 @@ const parseSections = (doc, featureImage) => {
       image: null,
       subHeadings: [],        // H3 titles within this section
       h3Paragraphs: new Map(), // H3 title → [following paragraphs] (for FAQ Q&A)
+      sectionIntro: null,      // First paragraph BEFORE any H3 (true intro, not an H3 answer)
     };
 
     // Walk siblings until next H2, capturing H3 context
     let node = h2.nextElementSibling;
     const listNodes = [];
     let currentH3 = null; // Track which H3 we're under
+    let lastParaBeforeFirstList = null; // Track the paragraph that introduces the first bullet list
+    let hitFirstList = false;
+    let hitFirstH3 = false; // Track whether we've seen an H3 yet
 
     while (node) {
       if (node.tagName === 'H2') break;
@@ -171,6 +180,7 @@ const parseSections = (doc, featureImage) => {
         if (h3Text.length > 3) {
           section.subHeadings.push(h3Text);
           currentH3 = h3Text;
+          hitFirstH3 = true;
           section.h3Paragraphs.set(currentH3, []);
         }
         node = node.nextElementSibling;
@@ -188,6 +198,9 @@ const parseSections = (doc, featureImage) => {
         const text = node.innerText.replace(/\s+/g, ' ').trim();
         if (text.length > 15) {
           section.paragraphs.push(text);
+          if (!hitFirstList) lastParaBeforeFirstList = text;
+          // Capture first paragraph before any H3 as true section intro
+          if (!hitFirstH3 && !section.sectionIntro) section.sectionIntro = text;
           // Also track which H3 this paragraph belongs to
           if (currentH3 && section.h3Paragraphs.has(currentH3)) {
             section.h3Paragraphs.get(currentH3).push(text);
@@ -196,6 +209,7 @@ const parseSections = (doc, featureImage) => {
       }
 
       if (node.tagName === 'UL' || node.tagName === 'OL') {
+        if (!hitFirstList) hitFirstList = true;
         listNodes.push(node);
       }
 
@@ -205,6 +219,8 @@ const parseSections = (doc, featureImage) => {
     if (listNodes.length > 0) {
       section.bullets = extractBullets(listNodes);
     }
+
+    section.bulletIntro = lastParaBeforeFirstList;
 
     if (section.paragraphs.length > 0 || section.bullets.length > 0) {
       sections.push(section);
@@ -345,12 +361,17 @@ const generateBeatSlides = (article, meta) => {
 
 // ── Main ──
 
-export const generateSlides = (article) => {
+export const generateSlides = (article, { density = 'balanced' } = {}) => {
   // Check if this is a beat/video article (requires #video + #video-preview tags + track URL)
   if (isBeatArticle(article)) {
     const beatMeta = parseBeatMeta(article.html);
     if (beatMeta) return generateBeatSlides(article, beatMeta);
   }
+
+  // Resolve density-aware limits and slide count targets
+  const densityLimits = getLimitsForDensity(density);
+  const preset = DENSITY_PRESETS[density] || DENSITY_PRESETS.balanced;
+  const maxSlides = preset.maxSlides;
 
   const slides = [];
 
@@ -365,9 +386,9 @@ export const generateSlides = (article) => {
   });
 
   // 2. Content slides
-  const contentSlides = extractContentSlides(article.html, article.featureImage);
+  const contentSlides = extractContentSlides(article.html, article.featureImage, densityLimits, maxSlides);
   contentSlides.forEach((cs, idx) => {
-    if (slides.length >= MAX_SLIDES - 1) return;
+    if (slides.length >= maxSlides - 1) return;
     slides.push({
       id: `slide-content-${Date.now()}-${idx}`,
       type: 'content',
@@ -389,7 +410,7 @@ export const generateSlides = (article) => {
       id: `slide-excerpt-${Date.now()}`,
       type: 'content',
       title: 'Key Takeaway',
-      content: condenseSentences(article.excerpt, CHAR_LIMIT),
+      content: condenseSentences(article.excerpt, densityLimits.contentCharLimit),
       bullets: null,
       imageSlide: false,
       image: null,
@@ -416,22 +437,201 @@ export const generateSlides = (article) => {
   return slides;
 };
 
-const extractContentSlides = (html, featureImage) => {
+// ── Section → Slide(s) Expander ──
+// Converts a single parsed section into one or more slide objects.
+// The FIRST slide of each section is always the most content-dense
+// (overview with bullets or packed paragraphs) so that even when
+// the allocation only allows 1 slide per section, coverage is maximised.
+
+const expandSection = (sec, limits) => {
+  const L = limits || LIMITS;
+  const charLimit = L.contentCharLimit;
+  const bulletIntroLimit = L.bulletIntroCharLimit;
+  const bulletLimit = L.bulletCharLimit;
+  const maxBullets = L.maxBulletsNoIntro;
+  const maxBulletsIntro = L.maxBulletsWithIntro;
+  const maxTitleLen = L.maxTitleLen;
+
+  const slides = [];
+  const title = sec.title;
+  const titleLower = title.toLowerCase().trim();
+
+  // Skip "next reads" / link-list sections
+  const isLinkList = (titleLower.includes('next read') || titleLower.includes('related') || titleLower.includes('further reading'))
+    && sec.paragraphs.length === 0;
+  if (isLinkList) return slides;
+
+  const isFaqPattern = ['faqs', 'faq', 'common misconceptions', 'myths', 'common questions'].includes(titleLower)
+    || (titleLower.includes('misconception') || titleLower.includes('myth') || titleLower.includes('faq'));
+  const isFaqSection = isFaqPattern && sec.subHeadings.length >= 2;
+
+  // ── Strategy A: FAQ section ──
+  // First slide: overview with FAQ questions as bullet points (max density).
+  // Continuations: individual Q&A pairs for deep reading.
+  if (isFaqSection) {
+    const questions = [];
+    for (const [q] of sec.h3Paragraphs) {
+      if (q.length > 10) {
+        const short = q.length > bulletLimit
+          ? q.substring(0, bulletLimit).replace(/\s+\S*$/, '').trim()
+          : q;
+        questions.push(short.replace(/\?*$/, '?'));
+      }
+    }
+    if (questions.length > 0) {
+      // Use only true pre-H3 intro (not an answer paragraph)
+      const introContent = sec.sectionIntro
+        ? condenseSentences(sec.sectionIntro, bulletIntroLimit) : '';
+      slides.push({
+        title,
+        content: introContent,
+        bullets: questions.slice(0, maxBullets),
+      });
+    }
+    // Continuations: one slide per Q&A pair
+    for (const [q, paras] of sec.h3Paragraphs) {
+      const answer = paras.join(' ');
+      if (!answer || answer.length < 20) continue;
+      let slideTitle = q.length > maxTitleLen
+        ? q.substring(0, maxTitleLen).replace(/\s+\S*$/, '').trim() + '?'
+        : q.replace(/\?*$/, '?');
+      slides.push({
+        title: slideTitle,
+        content: condenseSentences(answer, charLimit),
+        bullets: null,
+      });
+    }
+    if (slides.length > 0) return slides;
+  }
+
+  // ── Strategy B: Section with bullets ──
+  // Bullet counts derived from pixel-budget math in layoutEngine:
+  //   With intro text: maxBulletsIntro — title + intro + bullets must fit square canvas
+  //   Without intro:   maxBullets — title + bullets only
+  if (sec.bullets.length >= 2) {
+    const allBullets = sec.bullets;
+    const introContent = sec.bulletIntro
+      ? condenseSentences(sec.bulletIntro, bulletIntroLimit)
+      : '';
+
+    const hasIntro = introContent.length > 0;
+    const firstCount = hasIntro
+      ? Math.min(maxBulletsIntro, allBullets.length)
+      : Math.min(maxBullets, allBullets.length);
+
+    const firstChunk = allBullets.slice(0, firstCount);
+    slides.push({
+      title,
+      content: introContent,
+      bullets: firstChunk,
+    });
+
+    // Continuation slides for remaining bullets (no intro = more room)
+    for (let i = firstCount; i < allBullets.length; i += maxBullets) {
+      const chunk = allBullets.slice(i, i + maxBullets);
+      slides.push({
+        title: `${title} (cont.)`,
+        content: '',
+        bullets: chunk,
+      });
+    }
+    return slides;
+  }
+
+  // ── Strategy C: Section with H3 subheadings (non-FAQ) ──
+  // Preserve H3 titles by prepending them to their paragraph blocks.
+  // This keeps hierarchical context that would otherwise be lost.
+  if (sec.subHeadings.length >= 2 && sec.h3Paragraphs.size >= 2) {
+    // Build enriched text: "H3 Title: paragraph text" for each sub-section
+    const enrichedParts = [];
+    // Include any pre-H3 intro paragraph first
+    if (sec.sectionIntro) enrichedParts.push(sec.sectionIntro);
+    for (const [h3Title, paras] of sec.h3Paragraphs) {
+      const body = paras.join(' ');
+      if (body.length < 20) continue;
+      enrichedParts.push(`${h3Title}: ${body}`);
+    }
+    if (enrichedParts.length > 0) {
+      const fullText = enrichedParts.join(' ');
+      if (fullText.length <= charLimit) {
+        slides.push({ title, content: fullText, bullets: null });
+      } else {
+        // One slide per H3 sub-section for deep reading
+        if (sec.sectionIntro) {
+          slides.push({ title, content: condenseSentences(sec.sectionIntro, charLimit), bullets: null });
+        }
+        for (const [h3Title, paras] of sec.h3Paragraphs) {
+          const body = paras.join(' ');
+          if (body.length < 20) continue;
+          let slideTitle = h3Title.length > maxTitleLen
+            ? h3Title.substring(0, maxTitleLen).replace(/\s+\S*$/, '').trim()
+            : h3Title;
+          slides.push({ title: slideTitle, content: condenseSentences(body, charLimit), bullets: null });
+        }
+      }
+      if (slides.length > 0) return slides;
+    }
+  }
+
+  // ── Strategy D: Paragraph-only section — split into multiple slides if long ──
+  if (sec.paragraphs.length > 0) {
+    const fullText = sec.paragraphs.join(' ');
+
+    if (fullText.length <= charLimit) {
+      slides.push({ title, content: fullText, bullets: null });
+    } else {
+      // Split by sentence groups that fit within charLimit
+      // Smart regex: skip abbreviations like e.g., i.e., vs., U.S., Dr., $99.99
+      const sentences = fullText.match(/[^.!?]*(?:(?:e\.g\.|i\.e\.|vs\.|etc\.|Dr\.|Mr\.|Mrs\.|Jr\.|Sr\.|\d+\.\d+)[^.!?]*)*[.!?]+/g) || [fullText];
+      let currentContent = '';
+      let slideIdx = 0;
+
+      for (const sentence of sentences) {
+        if ((currentContent + sentence).length > charLimit && currentContent.length > 0) {
+          const slideTitle = slideIdx === 0 ? title : `${title} (cont.)`;
+          slides.push({ title: slideTitle, content: currentContent.trim(), bullets: null });
+          currentContent = sentence;
+          slideIdx++;
+        } else {
+          currentContent += sentence;
+        }
+      }
+      if (currentContent.trim().length > 10) {
+        const slideTitle = slideIdx === 0 ? title : `${title} (cont.)`;
+        slides.push({ title: slideTitle, content: currentContent.trim(), bullets: null });
+      }
+    }
+
+    // If section also has a single bullet, append it
+    if (sec.bullets.length === 1 && slides.length > 0) {
+      slides[slides.length - 1].bullets = sec.bullets;
+    }
+
+    return slides;
+  }
+
+  // ── Strategy E: Bullets only, no paragraphs ──
+  if (sec.bullets.length === 1) {
+    slides.push({ title, content: condenseSentences(sec.bullets[0], charLimit), bullets: null });
+  }
+
+  return slides;
+};
+
+const extractContentSlides = (html, featureImage, limits, maxSlides) => {
   if (!html) return [];
+  const L = limits || LIMITS;
+  const effectiveMaxSlides = maxSlides || DENSITY_PRESETS.balanced.maxSlides;
 
   const parser = new DOMParser();
   const doc = parser.parseFromString(html, 'text/html');
   const { sections } = parseSections(doc, featureImage);
 
-  // Detect embedded YouTube videos — store for videoUrl on slides, but
-  // DON'T auto-create dedicated "Watch the Video" thumbnail slides.
-  // YouTube thumbnails look bad as full-bleed backgrounds.
+  // Detect embedded YouTube videos
   const ytEmbeds = findYouTubeEmbeds(doc);
 
   if (sections.length === 0) {
     const results = [];
-
-    // Fallback: collect paragraphs
     const paragraphs = doc.querySelectorAll('p');
     let collected = '';
     for (const p of paragraphs) {
@@ -442,130 +642,111 @@ const extractContentSlides = (html, featureImage) => {
     if (collected.length > 20) {
       results.push({
         title: 'Key Insight',
-        content: condenseSentences(collected, CHAR_LIMIT),
+        content: condenseSentences(collected, L.contentCharLimit),
         bullets: null,
         imageSlide: false,
         image: null,
-        // Attach YouTube URL to first slide so user can export video if desired
         videoUrl: ytEmbeds.length > 0 ? ytEmbeds[0].url : null,
       });
     }
     return results;
   }
 
-  // Budget: pick top N sections, scored by content richness
-  const budget = Math.min(TARGET.max, Math.max(TARGET.min, sections.length));
+  // Max content slide budget (total slides minus cover + CTA)
+  const maxContent = effectiveMaxSlides - 2;
 
-  // Score each section: longer paragraphs and more bullets = better content for carousel
-  const scored = sections.map((sec, i) => {
-    const textLen = sec.paragraphs.join(' ').length;
-    const bulletScore = sec.bullets.length * 40;
-    const hasImage = sec.image ? 20 : 0;
-    // Slight bonus for earlier sections (more important context)
-    const posBonus = Math.max(0, 10 - i * 2);
-    const titleLower = sec.title.toLowerCase().trim();
-    // Penalize link-list / "next reads" sections (bullets only, no paragraphs)
-    const isLinkList = (titleLower.includes('next read') || titleLower.includes('related') || titleLower.includes('further reading'))
-      && sec.paragraphs.length === 0;
-    // Penalize generic FAQ/summary sections so richer content gets priority
-    const isGeneric = ['faqs', 'faq', 'summary', 'conclusion', 'final thoughts', 'wrap up', 'key takeaways',
-      'common misconceptions', 'myths', 'common questions'].includes(titleLower)
-      || titleLower.includes('misconception') || titleLower.includes('myth');
-    const penalty = isLinkList ? -200 : isGeneric ? -50 : 0;
-    return { sec, idx: i, score: textLen + bulletScore + hasImage + posBonus + penalty };
-  });
-
-  // If we have more sections than budget, pick the highest-scoring ones
-  // but preserve their original order for narrative flow
-  let selected;
-  if (sections.length <= budget) {
-    selected = scored;
-  } else {
-    const sorted = [...scored].sort((a, b) => b.score - a.score);
-    const topIndices = sorted.slice(0, budget).map(s => s.idx).sort((a, b) => a - b);
-    selected = topIndices.map(i => scored[i]);
+  // ── Merge thin sections ──
+  // If a section has very little total content (paragraphs + bullets combined),
+  // merge it into the previous section so it doesn't waste a whole slide.
+  const THIN_THRESHOLD = 250;
+  const merged = [];
+  for (const sec of sections) {
+    const paraChars = sec.paragraphs.join(' ').length;
+    const bulletChars = sec.bullets.reduce((sum, b) => sum + b.length, 0);
+    const totalChars = paraChars + bulletChars;
+    const isThin = totalChars < THIN_THRESHOLD && sec.bullets.length <= 1 && !sec.image && sec.subHeadings.length === 0;
+    if (isThin && merged.length > 0) {
+      const prev = merged[merged.length - 1];
+      // Convert single bullets to paragraphs for clean merge
+      if (sec.bullets.length === 1) prev.paragraphs.push(sec.bullets[0]);
+      prev.paragraphs.push(...sec.paragraphs);
+    } else {
+      merged.push(sec);
+    }
   }
 
-  const results = [];
+  // Expand every section into slide(s)
+  const sectionSlides = [];
   let imageSlideCount = 0;
 
-  for (const { sec } of selected) {
-    if (!sec) continue;
-
-    let title = sec.title;
-    let content = '';
-    let bullets = null;
-    const titleLower = title.toLowerCase().trim();
-    const isFaqPattern = ['faqs', 'faq', 'common misconceptions', 'myths', 'common questions'].includes(titleLower)
-      || (titleLower.includes('misconception') || titleLower.includes('myth') || titleLower.includes('faq'));
-    const isFaqSection = isFaqPattern && sec.subHeadings.length >= 2;
-    const hasSubHeadings = sec.subHeadings.length >= 1;
-
-    if (isFaqSection) {
-      // FAQ pattern: H3 = question, following P = answer. Format as Q&A.
-      // Pick the most informative Q&A pair (longest answer)
-      let bestQ = '';
-      let bestA = '';
-      for (const [q, paras] of sec.h3Paragraphs) {
-        const a = paras.join(' ');
-        if (a.length > bestA.length) {
-          bestQ = q;
-          bestA = a;
-        }
-      }
-      if (bestQ && bestA) {
-        // Use the question as the slide title for context
-        title = bestQ.length > MAX_TITLE_LEN
-          ? bestQ.substring(0, MAX_TITLE_LEN).replace(/\s+\S*$/, '').trim() + '?'
-          : bestQ.replace(/\?*$/, '?');
-        content = condenseSentences(bestA, CHAR_LIMIT);
-      } else {
-        // Fallback: use first paragraph
-        content = condenseSentences(sec.paragraphs.join(' '), CHAR_LIMIT);
-      }
-    } else if (sec.bullets.length >= 2) {
-      // Adaptive bullet count: long titles (3+ lines at 90px) get fewer bullets to fit safe zone
-      const titleLen = Math.min((title || '').length, MAX_TITLE_LEN);
-      const maxBullets = titleLen > BULLET_TITLE_THRESHOLD ? 2 : MAX_BULLETS;
-      bullets = sec.bullets.slice(0, maxBullets);
-    } else if (sec.bullets.length === 1 && sec.paragraphs.length === 0) {
-      // Single bullet with no paragraphs: use bullet text as body content
-      content = condenseSentences(sec.bullets[0], CHAR_LIMIT);
-    } else if (hasSubHeadings && sec.paragraphs.length > 0) {
-      // Section with H3 sub-headings: use the paragraphs under the first H3
-      // for more focused content (the H2 section title is already the slide title)
-      const firstH3 = sec.subHeadings[0];
-      const h3Paras = sec.h3Paragraphs.get(firstH3) || [];
-      const paraSource = h3Paras.length > 0 ? h3Paras.join(' ') : sec.paragraphs.join(' ');
-      content = condenseSentences(paraSource, CHAR_LIMIT);
-    } else {
-      const fullText = sec.paragraphs.join(' ');
-      content = condenseSentences(fullText, CHAR_LIMIT);
+  for (const sec of merged) {
+    const expanded = expandSection(sec, L);
+    if (expanded.length === 0) continue;
+    if (sec.image && imageSlideCount < MAX_IMG_SLIDES) {
+      expanded[0].imageSlide = true;
+      expanded[0].image = sec.image;
+      imageSlideCount++;
     }
+    sectionSlides.push(expanded);
+  }
 
-    // Is this an image slide? Only if section has an image AND we haven't hit the cap
-    const isImageSlide = !!(sec.image && imageSlideCount < MAX_IMG_SLIDES);
-    if (isImageSlide) imageSlideCount++;
+  // Multi-pass round-robin allocation:
+  // Phase 1: every section gets 1 slide (all topics covered).
+  // Phase 2+: distribute remaining budget round-robin to sections
+  // that have more expanded slides, preserving section order.
+  const numSections = sectionSlides.length;
+  if (numSections === 0) return [];
 
-    if (content.length > 10 || (bullets && bullets.length > 0) || isImageSlide) {
-      results.push({
-        title,
-        content: isImageSlide ? '' : content,
-        bullets: isImageSlide ? null : bullets,
-        imageSlide: isImageSlide,
-        image: isImageSlide ? sec.image : null,
-      });
+  const taken = new Array(numSections).fill(0);
+  let totalTaken = 0;
+
+  // Phase 1: one slide per section
+  for (let i = 0; i < numSections && totalTaken < maxContent; i++) {
+    if (sectionSlides[i].length > 0) {
+      taken[i] = 1;
+      totalTaken++;
     }
   }
 
-  // If there are YouTube embeds, attach the URL to the first content slide
-  // so users can optionally export video — but don't create a dedicated video slide
+  // Phase 2+: distribute remaining budget round-robin
+  let changed = true;
+  while (totalTaken < maxContent && changed) {
+    changed = false;
+    for (let i = 0; i < numSections && totalTaken < maxContent; i++) {
+      if (taken[i] < sectionSlides[i].length) {
+        taken[i]++;
+        totalTaken++;
+        changed = true;
+      }
+    }
+  }
+
+  // Build final slides in section order
+  let allSlides = [];
+  for (let i = 0; i < numSections; i++) {
+    allSlides.push(...sectionSlides[i].slice(0, taken[i]));
+  }
+
+  // Safety cap
+  if (allSlides.length > maxContent) {
+    allSlides = allSlides.slice(0, maxContent);
+  }
+
+  // Finalize slide objects
+  const results = allSlides.map(s => ({
+    title: s.title,
+    content: s.content || '',
+    bullets: s.bullets || null,
+    imageSlide: s.imageSlide || false,
+    image: s.image || null,
+  }));
+
+  // Attach YouTube URL to first content slide if present
   if (ytEmbeds.length > 0 && results.length > 0) {
     results[0].videoUrl = ytEmbeds[0].url;
   }
 
-  // Safety cap: never exceed maxSlides (minus cover + CTA = 2)
-  return results.slice(0, MAX_SLIDES - 2);
+  return results;
 };
 
 export const createBlankSlide = (type = 'content', number = 1) => {
