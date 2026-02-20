@@ -639,10 +639,183 @@ function renderContentBody({ slide, isPortrait, hasVideoEmbed, L, theme, heading
     : lo.verticalAlign === 'center' ? 'center'
     : 'flex-start';
 
-  // ── Continuation layout: section pill + content/bullets ──
+  // ── Continuation layout — 3 visual variants to avoid duplicate feel ──
+  // All variants use soft rounded elements consistent with the Ghost theme
+  // design language: no pill badges, no sharp lines.
   if (slide.isContinuation && !slide.subtype) {
+    const variant = slide.continuationVariant ?? 0;
     const isSparse = !slide.content && bulletCount <= 2;
     const sparseFontBoost = isSparse ? 6 : 0;
+    const rawTitle = slide.title || '';
+    const sectionLabel = rawTitle;
+
+    // Shared: muted section context label (accent dot + text, no enclosure)
+    const renderSectionLabel = (mb = lo.accentMarginBottom) => (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12,
+        marginBottom: mb, position: 'relative', zIndex: 10 }}>
+        <div style={{ width: 10, height: 10, borderRadius: '50%',
+          backgroundColor: theme.accent, opacity: 0.5, flexShrink: 0,
+          boxShadow: `0 0 10px ${theme.accent}40` }} />
+        <span style={{ fontFamily: headingFont, fontSize: Math.round(lo.titleFontSize * 0.44),
+          fontWeight: 600, color: theme.muted, opacity: 0.5, letterSpacing: '0.04em',
+          lineHeight: 1.25 }}>
+          {sectionLabel}
+        </span>
+      </div>
+    );
+
+    // ── Variant 1: Soft card — content inside a subtle rounded panel ──
+    if (variant === 1) {
+      return (
+        <div style={{
+          position: 'relative', zIndex: 10, flex: 1,
+          display: 'flex', flexDirection: 'column',
+          justifyContent: isSparse ? 'center' : 'flex-start',
+          padding: `${lo.padTop}px ${L.side}px ${lo.padBottom}px`,
+          boxSizing: 'border-box', height: '100%', overflow: 'hidden',
+        }}>
+          {/* Section label above card */}
+          {renderSectionLabel(isPortrait ? 24 : 18)}
+          {/* Soft rounded card panel — shrinks to fit content */}
+          <div style={{
+            position: 'relative', zIndex: 10,
+            display: 'flex', flexDirection: 'column',
+            justifyContent: 'flex-start',
+            borderRadius: isPortrait ? 20 : 16,
+            backgroundColor: `${theme.text}05`,
+            border: `1.5px solid ${theme.accent}18`,
+            boxShadow: `0 4px 32px ${theme.accent}10, 0 0 0 1px ${theme.text}05`,
+            padding: isPortrait ? '36px 32px' : '28px 26px',
+            overflow: 'hidden',
+          }}>
+            {/* H3 sub-heading inside card */}
+            {slide.subHeadingLabel && (
+              <div style={{ marginBottom: 20 }}>
+                <h3 style={{ fontFamily: headingFont, fontSize: Math.round(lo.titleFontSize * 0.62),
+                  fontWeight: 700, lineHeight: 1.15, color: theme.text, margin: 0,
+                  letterSpacing: '-0.01em' }}>
+                  {slide.subHeadingLabel}
+                </h3>
+                <div style={{ width: 40, height: lo.accentBarH, borderRadius: 9999,
+                  backgroundColor: theme.accent, marginTop: 16,
+                  boxShadow: `0 0 12px ${theme.accent}60` }} />
+              </div>
+            )}
+            {slide.content && (
+              <div style={{ marginBottom: bulletCount > 0 ? lo.introMarginBottom : 0 }}>
+                <p style={{ fontSize: hasBoth ? lo.introFontSize : lo.bodyFontSize,
+                  fontWeight: 400,
+                  lineHeight: hasBoth ? lo.introLineHeight : lo.bodyLineHeight,
+                  whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                  color: theme.text, opacity: 0.88, margin: 0 }}>
+                  {slide.content}
+                </p>
+              </div>
+            )}
+            {renderBullets({ bullets: slide.bullets, dotColor: theme.accent, textColor: theme.text,
+              fontSize: lo.bulletFontSize + sparseFontBoost, lineHeight: lo.bulletLineHeight,
+              gap: lo.bulletGap, dotSize: lo.bulletDotSize })}
+          </div>
+          <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 100,
+            background: `linear-gradient(to top, ${theme.bg} 30%, transparent 100%)`,
+            pointerEvents: 'none', zIndex: 15 }} />
+        </div>
+      );
+    }
+
+    // ── Variant 2: Highlight lead — first sentence enlarged, rest below ──
+    if (variant === 2) {
+      const fullText = slide.content || '';
+      const sentenceMatch = fullText.match(/^([^.!?]*[.!?])\s*/);
+      const hasLeadSplit = sentenceMatch && fullText.length > sentenceMatch[1].length + 20;
+      const leadText = hasLeadSplit ? sentenceMatch[1].trim() : '';
+      const restText = hasLeadSplit ? fullText.slice(sentenceMatch[0].length).trim() : fullText;
+      const leadFont = isPortrait ? 46 : 40;
+      return (
+        <div style={{
+          position: 'relative', zIndex: 10, flex: 1,
+          display: 'flex', flexDirection: 'column',
+          justifyContent: isSparse ? 'center' : 'flex-start',
+          padding: `${lo.padTop}px ${L.side}px ${lo.padBottom}px`,
+          boxSizing: 'border-box', height: '100%', overflow: 'hidden',
+        }}>
+          {/* Number watermark — bottom-left for variety */}
+          <div style={{ position: 'absolute', bottom: isPortrait ? 140 : 100, left: L.side - 10,
+            fontSize: isPortrait ? 280 : 220, fontWeight: 900, lineHeight: 1,
+            color: theme.text, opacity: 0.03, userSelect: 'none', pointerEvents: 'none', zIndex: 0,
+            fontFamily: headingFont }}>
+            {String(slide.number || '').padStart(2, '0')}
+          </div>
+          {/* Section label — right-aligned, plain text */}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 10,
+            marginBottom: isPortrait ? 28 : 20, position: 'relative', zIndex: 10 }}>
+            <span style={{ fontFamily: headingFont, fontSize: Math.round(lo.titleFontSize * 0.38),
+              fontWeight: 600, color: theme.muted, opacity: 0.45, letterSpacing: '0.06em',
+              lineHeight: 1.25 }}>
+              {sectionLabel}
+            </span>
+            <div style={{ width: 10, height: 10, borderRadius: '50%',
+              backgroundColor: theme.accent, opacity: 0.4, flexShrink: 0,
+              boxShadow: `0 0 8px ${theme.accent}30` }} />
+          </div>
+          {/* H3 sub-heading label */}
+          {slide.subHeadingLabel && (
+            <div style={{ position: 'relative', zIndex: 10, marginBottom: 16 }}>
+              <span style={{ fontFamily: headingFont, fontSize: Math.round(lo.titleFontSize * 0.54),
+                fontWeight: 700, color: theme.accent, opacity: 0.85, letterSpacing: '0.01em' }}>
+                {slide.subHeadingLabel}
+              </span>
+            </div>
+          )}
+          {/* Lead sentence — enlarged emphasis */}
+          {leadText && (
+            <div style={{ position: 'relative', zIndex: 10, marginBottom: 24 }}>
+              <p style={{ fontSize: leadFont, fontWeight: 600, lineHeight: 1.35,
+                color: theme.text, margin: 0, letterSpacing: '-0.01em' }}>
+                {leadText}
+              </p>
+              <div style={{ width: 48, height: lo.accentBarH, borderRadius: 9999,
+                backgroundColor: theme.accent, marginTop: 20,
+                boxShadow: `0 0 12px ${theme.accent}60` }} />
+            </div>
+          )}
+          {/* Remaining body text */}
+          {restText && (
+            <div style={{ position: 'relative', zIndex: 10,
+              marginBottom: bulletCount > 0 ? lo.introMarginBottom : 0 }}>
+              <p style={{ fontSize: hasBoth ? lo.introFontSize : lo.bodyFontSize,
+                fontWeight: 400,
+                lineHeight: hasBoth ? lo.introLineHeight : lo.bodyLineHeight,
+                whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                color: theme.text, opacity: 0.78, margin: 0 }}>
+                {restText}
+              </p>
+            </div>
+          )}
+          {/* Fallback: no lead split — render full content normally */}
+          {!leadText && !restText && slide.content && (
+            <div style={{ position: 'relative', zIndex: 10,
+              marginBottom: bulletCount > 0 ? lo.introMarginBottom : 0 }}>
+              <p style={{ fontSize: hasBoth ? lo.introFontSize : lo.bodyFontSize,
+                fontWeight: 400,
+                lineHeight: hasBoth ? lo.introLineHeight : lo.bodyLineHeight,
+                whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                color: theme.text, opacity: 0.88, margin: 0 }}>
+                {slide.content}
+              </p>
+            </div>
+          )}
+          {renderBullets({ bullets: slide.bullets, dotColor: theme.accent, textColor: theme.text,
+            fontSize: lo.bulletFontSize + sparseFontBoost, lineHeight: lo.bulletLineHeight,
+            gap: lo.bulletGap, dotSize: lo.bulletDotSize })}
+          <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 100,
+            background: `linear-gradient(to top, ${theme.bg} 30%, transparent 100%)`,
+            pointerEvents: 'none', zIndex: 15 }} />
+        </div>
+      );
+    }
+
+    // ── Variant 0 (default): Accent dot label + number watermark ──
     return (
       <div style={{
         position: 'relative', zIndex: 10, flex: 1,
@@ -657,27 +830,8 @@ function renderContentBody({ slide, isPortrait, hasVideoEmbed, L, theme, heading
           fontFamily: headingFont }}>
           {String(slide.number || '').padStart(2, '0')}
         </div>
-        {/* Section context pill */}
-        {(() => {
-          const raw = slide.title || '';
-          const pillTitle = raw.length > 38 ? raw.substring(0, 35) + '…' : raw;
-          return (
-            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 10,
-              backgroundColor: `${theme.accent}18`, border: `1px solid ${theme.accent}35`,
-              borderRadius: 9999, padding: isPortrait ? '8px 22px' : '6px 16px',
-              marginBottom: lo.accentMarginBottom, alignSelf: 'flex-start',
-              position: 'relative', zIndex: 10, whiteSpace: 'nowrap', maxWidth: '100%',
-              overflow: 'hidden' }}>
-              <div style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: theme.accent,
-                boxShadow: `0 0 8px ${theme.accent}`, flexShrink: 0 }} />
-              <span style={{ fontFamily: headingFont, fontSize: Math.round(lo.titleFontSize * 0.48),
-                fontWeight: 600, lineHeight: 1.2, color: theme.accent, opacity: 0.9,
-                letterSpacing: '0.02em', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {pillTitle}
-              </span>
-            </div>
-          );
-        })()}
+        {/* Section context — accent dot + muted label */}
+        {renderSectionLabel()}
         {/* On sparse slides, show a prominent section title for visual weight */}
         {isSparse && (
           <div style={{ position: 'relative', zIndex: 10, marginBottom: 28 }}>
@@ -690,7 +844,7 @@ function renderContentBody({ slide, isPortrait, hasVideoEmbed, L, theme, heading
               boxShadow: `0 0 10px ${theme.accent}80` }} />
           </div>
         )}
-        {/* H3 sub-heading label (strategy C slides) */}
+        {/* H3 sub-heading label */}
         {slide.subHeadingLabel && !isSparse && (
           <div style={{ position: 'relative', zIndex: 10, marginBottom: 16 }}>
             <span style={{

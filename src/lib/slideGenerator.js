@@ -592,6 +592,7 @@ export const generateSlides = (article, { density = 'balanced' } = {}) => {
       videoUrl: cs.videoUrl || null,
       number: idx + 1,
       isContinuation: cs.isContinuation || false,
+      continuationVariant: cs.continuationVariant ?? null,
       subtype: cs.subtype || null,
       tableData: cs.tableData || null,
       calloutEmoji: cs.calloutEmoji || '',
@@ -1141,6 +1142,19 @@ function extractContentSlides(html, featureImage, limits, maxSlides, density = '
     allSlides = allSlides.slice(0, maxContent);
   }
 
+  // Assign visual variants to consecutive continuation slides so they
+  // don't look like copy-pasted duplicates.  Variant cycles 0→1→2→0…
+  // within each run of continuations that share the same section title.
+  let contRunIdx = 0;
+  for (let i = 0; i < allSlides.length; i++) {
+    if (allSlides[i].isContinuation) {
+      allSlides[i].continuationVariant = contRunIdx % 3;
+      contRunIdx++;
+    } else {
+      contRunIdx = 0;
+    }
+  }
+
   // Finalize slide objects
   const results = allSlides.map(s => ({
     title: s.title,
@@ -1150,6 +1164,7 @@ function extractContentSlides(html, featureImage, limits, maxSlides, density = '
     image: s.image || null,
     imageCaption: s.imageCaption || null,
     isContinuation: s.isContinuation || false,
+    continuationVariant: s.continuationVariant ?? null,
     subtype: s.subtype || null,
     tableData: s.tableData || null,
     calloutEmoji: s.calloutEmoji || '',
