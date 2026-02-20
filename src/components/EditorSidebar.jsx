@@ -10,7 +10,7 @@ import ThemePicker from './ThemePicker';
 import { ICON_MAP, ICON_OPTIONS, CTA_ICON_OPTIONS } from './StoryCanvas';
 import { DENSITY_PRESETS, LIMITS } from '../lib/layoutEngine';
 import { normaliseYouTubeUrl } from '../lib/slideGenerator';
-import { createBlankStory } from '../lib/storyGenerator';
+import { createBlankStory, generateStories } from '../lib/storyGenerator';
 import { generateCaption } from '../lib/captionGenerator';
 import { generateTweet, generateThread } from '../lib/tweetGenerator';
 import CONFIG from '../config';
@@ -83,28 +83,32 @@ export default function EditorSidebar({
   return (
     <div className={`
       fixed top-[50px] bottom-0 left-0 z-40 w-[85vw] max-w-[320px] transform transition-transform duration-300 ease-in-out
-      md:relative md:top-auto md:bottom-auto md:inset-auto md:z-auto md:w-72 md:max-w-none md:transform-none
+      md:relative md:top-auto md:bottom-auto md:inset-auto md:z-auto md:w-80 md:max-w-none md:transform-none
       flex-none border-r border-border flex flex-col bg-surface
       ${mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
     `}>
       {/* Tab bar */}
-      <div className="flex-none flex border-b border-border">
+      <div className="flex-none flex border-b border-border bg-surface">
         {[
           { id: 'slides', icon: Layers, label: 'Slides' },
           { id: 'stories', icon: BookOpen, label: 'Stories' },
           { id: 'caption', icon: MessageSquare, label: 'Caption' },
-          { id: 'twitter', icon: Twitter, label: 'Twitter' },
-          { id: 'podcast', icon: Headphones, label: 'Podcast' },
+          { id: 'twitter', icon: Twitter, label: 'X' },
+          { id: 'podcast', icon: Headphones, label: 'Pod' },
         ].map(({ id, icon: Icon, label }) => (
           <button
             key={id}
             onClick={() => { setEditorTab(id); }}
-            className={`flex-1 py-2.5 text-[10px] font-semibold uppercase tracking-wider flex flex-col items-center gap-1 transition-all ${
-              editorTab === id ? 'text-fg-contrast bg-surface-100/50 border-b-2 border-violet-500' : 'text-fg-muted hover:text-fg-secondary'
+            className={`flex-1 py-2 text-[9px] font-semibold flex flex-col items-center gap-1 transition-all relative ${
+              editorTab === id ? 'text-white' : 'text-white/30 hover:text-white/55'
             }`}
           >
-            <Icon size={14} />
-            {label}
+            {/* Active accent dot */}
+            <div className={`absolute top-0 left-1/2 -translate-x-1/2 w-6 h-0.5 rounded-full transition-all ${
+              editorTab === id ? 'bg-violet-500 opacity-100 shadow-[0_0_8px_rgba(139,92,246,0.8)]' : 'opacity-0'
+            }`} />
+            <Icon size={13} className={editorTab === id ? 'text-violet-400' : ''} />
+            <span className="tracking-wide">{label}</span>
           </button>
         ))}
       </div>
@@ -188,7 +192,14 @@ export default function EditorSidebar({
             </div>
             <div className="p-4 space-y-4 flex-1">
               <div className="flex items-center justify-between">
-                <span className="text-[11px] font-semibold uppercase tracking-wider text-white/30">Slide {currentIndex + 1} of {slides.length}</span>
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-white/30 flex-shrink-0">Slide {currentIndex + 1} of {slides.length}</span>
+                  {currentSlide && (currentSlide.subtype || currentSlide.type !== 'content' || currentSlide.isContinuation) && (
+                    <span className="text-[8px] font-mono font-bold px-1.5 py-0.5 rounded border border-violet-400/25 text-violet-400/70 leading-none flex-shrink-0">
+                      {currentSlide.type === 'cover' ? 'COVER' : currentSlide.type === 'cta' ? 'CTA' : currentSlide.subtype ? currentSlide.subtype.toUpperCase() : currentSlide.isContinuation ? 'CONT' : ''}
+                    </span>
+                  )}
+                </div>
                 <div className="flex gap-1">
                   <button onClick={onAddSlideAfter} className="p-1.5 rounded-md hover:bg-white/[0.06] text-white/40 hover:text-white/70 transition-colors" title="Add slide after"><Plus size={14} /></button>
                   <button onClick={onDuplicateSlide} className="p-1.5 rounded-md hover:bg-white/[0.06] text-white/40 hover:text-white/70 transition-colors" title="Duplicate slide"><Copy size={14} /></button>
@@ -197,12 +208,38 @@ export default function EditorSidebar({
               </div>
               {currentSlide && (
                 <div className="space-y-3">
+                  {/* Slide type selector */}
+                  {!currentSlide.subtype && !currentSlide.isContinuation && (
+                    <div>
+                      <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Slide Type</label>
+                      <div className="flex bg-white/[0.04] p-1 rounded-lg">
+                        {['cover', 'content', 'cta'].map(t => (
+                          <button key={t} onClick={() => onUpdateSlideField(currentSlide.id, 'type', t)}
+                            className={`flex-1 py-1.5 text-[10px] font-semibold rounded-md transition-all capitalize ${currentSlide.type === t ? 'bg-white/[0.12] text-white' : 'text-white/35 hover:text-white/55'}`}>
+                            {t === 'cta' ? 'CTA' : t.charAt(0).toUpperCase() + t.slice(1)}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   <div>
-                    <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Title</label>
+                    <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 flex items-center justify-between">
+                      <span>Title</span>
+                      {currentSlide.type === 'content' && (() => {
+                        const tLen = (currentSlide.title || '').length;
+                        const over = tLen > LIMITS.maxTitleLen;
+                        return <span className={`text-[9px] normal-case font-mono ${over ? 'text-amber-400/80' : 'text-white/20'}`}>{tLen}/{LIMITS.maxTitleLen}{over ? ' ⚠' : ''}</span>;
+                      })()}
+                    </label>
                     <input type="text" value={currentSlide.title || ''} onChange={(e) => onUpdateSlideField(currentSlide.id, 'title', e.target.value)} className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors" />
                   </div>
                   {currentSlide.type === 'content' && (
                     <>
+                      {/* H3 sub-heading label — always editable for content slides */}
+                      <div>
+                        <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Sub-heading <span className="text-white/15 normal-case">(shown in accent colour above body)</span></label>
+                        <input type="text" value={currentSlide.subHeadingLabel || ''} onChange={(e) => onUpdateSlideField(currentSlide.id, 'subHeadingLabel', e.target.value || undefined)} placeholder="Optional label..." className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors placeholder:text-white/15" />
+                      </div>
                       <div>
                         <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Content</label>
                         <textarea value={currentSlide.content || ''} onChange={(e) => onUpdateSlideField(currentSlide.id, 'content', e.target.value)} rows={3} className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors resize-none" />
@@ -211,13 +248,13 @@ export default function EditorSidebar({
                             <Type size={10} className="text-white/20" />
                             <span className="text-[9px] text-white/20 uppercase tracking-wider">Font</span>
                             <button
-                              onClick={() => onUpdateSlideField(currentSlide.id, 'fontSizeOverride', Math.max(-8, (currentSlide.fontSizeOverride || 0) - 2))}
+                              onClick={() => onUpdateSlideField(currentSlide.id, 'fontSizeOverride', Math.max(-12, (currentSlide.fontSizeOverride || 0) - 2))}
                               className="w-5 h-5 flex items-center justify-center rounded bg-surface-100/50 text-fg-muted hover:text-fg-contrast hover:bg-surface-200 transition-colors"
                               title="Decrease font size"
                             ><Minus size={10} /></button>
                             <span className="text-[10px] text-fg-secondary w-7 text-center font-mono">{(currentSlide.fontSizeOverride || 0) > 0 ? '+' : ''}{currentSlide.fontSizeOverride || 0}</span>
                             <button
-                              onClick={() => onUpdateSlideField(currentSlide.id, 'fontSizeOverride', Math.min(8, (currentSlide.fontSizeOverride || 0) + 2))}
+                              onClick={() => onUpdateSlideField(currentSlide.id, 'fontSizeOverride', Math.min(12, (currentSlide.fontSizeOverride || 0) + 2))}
                               className="w-5 h-5 flex items-center justify-center rounded bg-surface-100/50 text-fg-muted hover:text-fg-contrast hover:bg-surface-200 transition-colors"
                               title="Increase font size"
                             ><Plus size={10} /></button>
@@ -289,6 +326,20 @@ export default function EditorSidebar({
                                 <img src={currentSlide.image} alt="" className="w-full h-full object-cover" />
                               </div>
                             )}
+                            <div className="mt-2">
+                              <label className="text-[10px] font-medium text-white/20 uppercase tracking-wider mb-1 flex items-center justify-between">
+                                <span>Image Focus (vertical)</span>
+                                <span className="text-white/15 normal-case">{Math.round((currentSlide.parallaxPosition ?? 0.5) * 100)}%</span>
+                              </label>
+                              <input type="range" min="0" max="100" step="1"
+                                value={Math.round((currentSlide.parallaxPosition ?? 0.5) * 100)}
+                                onChange={(e) => onUpdateSlideField(currentSlide.id, 'parallaxPosition', parseInt(e.target.value) / 100)}
+                                className="w-full accent-violet-500 cursor-pointer" style={{ height: 4 }} />
+                              <div className="flex justify-between mt-0.5">
+                                <span className="text-[9px] text-white/15">Top</span>
+                                <span className="text-[9px] text-white/15">Bottom</span>
+                              </div>
+                            </div>
                           </>
                         )}
                       </div>
@@ -336,6 +387,60 @@ export default function EditorSidebar({
                       </div>
                     </>
                   )}
+                  {/* Image slide caption */}
+                  {currentSlide.imageSlide && (
+                    <div>
+                      <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Image Caption <span className="text-white/15 normal-case">(italic label shown below body text)</span></label>
+                      <input type="text" value={currentSlide.imageCaption || ''} onChange={(e) => onUpdateSlideField(currentSlide.id, 'imageCaption', e.target.value || null)} placeholder="Optional caption..." className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors placeholder:text-white/15" />
+                    </div>
+                  )}
+                  {/* Code slide fields */}
+                  {currentSlide.subtype === 'code' && (
+                    <div>
+                      <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Caption <span className="text-white/15 normal-case">(context shown above the code block)</span></label>
+                      <input type="text" value={currentSlide.codeCaption || ''} onChange={(e) => onUpdateSlideField(currentSlide.id, 'codeCaption', e.target.value)} placeholder="Briefly describe this code..." className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors placeholder:text-white/15" />
+                    </div>
+                  )}
+                  {/* Callout fields */}
+                  {currentSlide.subtype === 'callout' && (
+                    <>
+                      <div>
+                        <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Style</label>
+                        <div className="flex bg-white/[0.04] p-1 rounded-lg">
+                          <button onClick={() => onUpdateSlideField(currentSlide.id, 'calloutIsQuote', false)}
+                            className={`flex-1 py-1.5 text-[10px] font-semibold rounded-md transition-all ${!currentSlide.calloutIsQuote ? 'bg-white/[0.12] text-white' : 'text-white/35 hover:text-white/55'}`}>
+                            Callout (emoji)
+                          </button>
+                          <button onClick={() => onUpdateSlideField(currentSlide.id, 'calloutIsQuote', true)}
+                            className={`flex-1 py-1.5 text-[10px] font-semibold rounded-md transition-all ${currentSlide.calloutIsQuote ? 'bg-white/[0.12] text-white' : 'text-white/35 hover:text-white/55'}`}>
+                            Pull Quote
+                          </button>
+                        </div>
+                      </div>
+                      {!currentSlide.calloutIsQuote && (
+                        <div>
+                          <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Callout Emoji <span className="text-white/15 normal-case">(optional)</span></label>
+                          <input type="text" value={currentSlide.calloutEmoji || ''} onChange={(e) => onUpdateSlideField(currentSlide.id, 'calloutEmoji', e.target.value)} placeholder="e.g. 💡" className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors" />
+                        </div>
+                      )}
+                      <div>
+                        <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Callout Text</label>
+                        <textarea value={currentSlide.calloutText || ''} onChange={(e) => onUpdateSlideField(currentSlide.id, 'calloutText', e.target.value)} rows={3} className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors resize-none" />
+                      </div>
+                    </>
+                  )}
+                  {currentSlide.type === 'cta' && (
+                    <>
+                      <div>
+                        <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">CTA Heading <span className="text-white/15 normal-case">(Enter for line break)</span></label>
+                        <textarea rows={2} value={currentSlide.ctaHeading ?? ''} onChange={(e) => onUpdateSlideField(currentSlide.id, 'ctaHeading', e.target.value)} placeholder="Read Full&#10;Article" className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors resize-none" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">CTA Label</label>
+                        <input type="text" value={currentSlide.ctaLabel ?? ''} onChange={(e) => onUpdateSlideField(currentSlide.id, 'ctaLabel', e.target.value)} placeholder="Link in Bio" className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors" />
+                      </div>
+                    </>
+                  )}
                   {(currentSlide.type === 'cover' || currentSlide.type === 'cta') && currentSlide.subtitle !== undefined && (
                     <div>
                       <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Subtitle / Tag</label>
@@ -343,10 +448,16 @@ export default function EditorSidebar({
                     </div>
                   )}
                   {currentSlide.type === 'cover' && (
-                    <div>
-                      <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Reading Time</label>
-                      <input type="text" value={currentSlide.readingTime || ''} onChange={(e) => onUpdateSlideField(currentSlide.id, 'readingTime', e.target.value)} className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors" />
-                    </div>
+                    <>
+                      <div>
+                        <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Reading Time</label>
+                        <input type="text" value={currentSlide.readingTime || ''} onChange={(e) => onUpdateSlideField(currentSlide.id, 'readingTime', e.target.value)} className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Author <span className="text-white/15 normal-case">(shown below reading time)</span></label>
+                        <input type="text" value={currentSlide.primaryAuthor || ''} onChange={(e) => onUpdateSlideField(currentSlide.id, 'primaryAuthor', e.target.value || null)} placeholder="Author name..." className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors placeholder:text-white/15" />
+                      </div>
+                    </>
                   )}
                 </div>
               )}
@@ -361,6 +472,17 @@ export default function EditorSidebar({
               <span className="text-[11px] font-semibold uppercase tracking-wider text-white/30">
                 Story {currentStoryIndex + 1} of {storyFrames.length}
               </span>
+              {article && (
+                <button
+                  onClick={() => {
+                    const fresh = generateStories(article, slides);
+                    setStoryFrames(fresh);
+                    setCurrentStoryIndex(0);
+                  }}
+                  className="p-1.5 rounded-md hover:bg-white/[0.06] text-white/30 hover:text-white/60 transition-colors flex items-center gap-1"
+                  title="Regenerate all story frames from article"
+                ><RotateCw size={12} /></button>
+              )}
               <div className="flex gap-0.5">
                 {/* Move left */}
                 <button
@@ -390,7 +512,8 @@ export default function EditorSidebar({
                 {/* Add */}
                 <button
                   onClick={() => {
-                    const ns = createBlankStory('hook');
+                    const curType = storyFrames[currentStoryIndex]?.type || 'hook';
+                    const ns = createBlankStory(curType);
                     const nf = [...storyFrames];
                     nf.splice(currentStoryIndex + 1, 0, ns);
                     setStoryFrames(nf);
@@ -431,20 +554,45 @@ export default function EditorSidebar({
                 <div className="space-y-3">
                   <div>
                     <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Type</label>
-                    <div className="flex bg-white/[0.04] p-1 rounded-lg">
-                      {['hook', 'teaser', 'poll', 'cta'].map(t => (
-                        <button key={t} onClick={() => onUpdateStoryField('type', t)} className={`flex-1 py-1.5 text-[10px] font-semibold rounded-md transition-all capitalize ${sfType === t ? 'bg-white/[0.1] text-white' : 'text-white/40 hover:text-white/60'}`}>{t}</button>
+                    <div className="grid grid-cols-3 gap-1 bg-white/[0.04] p-1 rounded-lg">
+                      {['hook', 'teaser', 'tip', 'quote', 'poll', 'cta'].map(t => (
+                        <button key={t} onClick={() => onUpdateStoryField('type', t)} className={`py-1.5 text-[10px] font-semibold rounded-md transition-all capitalize ${sfType === t ? 'bg-white/[0.12] text-white' : 'text-white/40 hover:text-white/60'}`}>{t}</button>
                       ))}
                     </div>
                   </div>
                   <div>
-                    <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Headline</label>
-                    <textarea value={sf.headline || ''} onChange={(e) => onUpdateStoryField('headline', e.target.value)} rows={2} className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors resize-none" />
+                    <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">{sfType === 'quote' ? 'Quote Text' : 'Headline'}</label>
+                    <textarea value={sf.headline || ''} onChange={(e) => onUpdateStoryField('headline', e.target.value)} rows={sfType === 'quote' ? 3 : 2} className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors resize-none" />
                   </div>
                   <div>
-                    <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Subtext</label>
+                    <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">{sfType === 'quote' ? 'Attribution' : 'Subtext'}</label>
                     <textarea value={sf.subtext || ''} onChange={(e) => onUpdateStoryField('subtext', e.target.value)} rows={2} className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors resize-none" />
                   </div>
+                  {/* Teaser-specific: bullet points */}
+                  {sfType === 'teaser' && (
+                    <div>
+                      <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 flex items-center justify-between">
+                        <span>Bullets <span className="text-white/15 normal-case">(replaces subtext when present)</span></span>
+                        <button onClick={() => onUpdateStoryField('bullets', [...(sf.bullets || []), 'Key point'])} className="text-white/30 hover:text-white/60 transition-colors" title="Add bullet"><Plus size={12} /></button>
+                      </label>
+                      {sf.bullets && sf.bullets.length > 0 && (
+                        <div className="space-y-1.5">
+                          {sf.bullets.map((b, bi) => (
+                            <div key={bi} className="flex gap-1">
+                              <input type="text" value={b} onChange={(e) => {
+                                const updated = [...sf.bullets]; updated[bi] = e.target.value;
+                                onUpdateStoryField('bullets', updated);
+                              }} className="flex-1 px-2.5 py-1.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-xs text-white outline-none focus:border-white/20 transition-colors" />
+                              <button onClick={() => {
+                                const updated = sf.bullets.filter((_, j) => j !== bi);
+                                onUpdateStoryField('bullets', updated.length > 0 ? updated : null);
+                              }} className="px-1.5 text-white/20 hover:text-red-400 transition-colors flex-shrink-0" title="Remove"><Trash2 size={11} /></button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                   {/* Icon picker */}
                   <div>
                     <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1.5 block">Icon</label>
@@ -506,6 +654,20 @@ export default function EditorSidebar({
                       </div>
                     );
                   })()}
+                  {/* Tip label — for tip type */}
+                  {sfType === 'tip' && (
+                    <div>
+                      <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Tip Label <span className="text-white/15 normal-case">(shown above headline)</span></label>
+                      <input type="text" value={sf.tipLabel ?? 'Pro Tip'} onChange={(e) => onUpdateStoryField('tipLabel', e.target.value)} placeholder="Pro Tip" className="w-full px-3 py-2 bg-white/[0.04] border border-white/[0.08] rounded-lg text-xs text-white outline-none focus:border-white/20 transition-colors placeholder:text-white/15" />
+                    </div>
+                  )}
+                  {/* Quote source — for quote type */}
+                  {sfType === 'quote' && (
+                    <div>
+                      <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Source <span className="text-white/15 normal-case">(attribution shown below quote)</span></label>
+                      <input type="text" value={sf.subtext || ''} onChange={(e) => onUpdateStoryField('subtext', e.target.value)} placeholder="— Author Name" className="w-full px-3 py-2 bg-white/[0.04] border border-white/[0.08] rounded-lg text-xs text-white outline-none focus:border-white/20 transition-colors placeholder:text-white/15" />
+                    </div>
+                  )}
                   {/* CTA Label — for teaser and cta types */}
                   {(sfType === 'teaser' || sfType === 'cta') && (
                     <div>
@@ -563,18 +725,15 @@ export default function EditorSidebar({
                 <button onClick={() => copyToClipboard(`${caption.hook}\n\n${caption.body}\n\n${caption.cta}\n\n${caption.hashtags}`)} className="p-1.5 rounded-md hover:bg-white/[0.06] text-white/40 hover:text-white/70 transition-colors" title="Copy all"><Copy size={13} /></button>
               </div>
             </div>
-            <div>
-              <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Hook Line</label>
-              <textarea value={caption.hook} onChange={(e) => setCaption(p => ({ ...p, hook: e.target.value }))} rows={2} className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors resize-none" />
-            </div>
-            <div>
-              <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">Body</label>
-              <textarea value={caption.body} onChange={(e) => setCaption(p => ({ ...p, body: e.target.value }))} rows={5} className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors resize-none" />
-            </div>
-            <div>
-              <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 block">CTA</label>
-              <textarea value={caption.cta} onChange={(e) => setCaption(p => ({ ...p, cta: e.target.value }))} rows={2} className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors resize-none" />
-            </div>
+            {[['hook', 'Hook Line', 2], ['body', 'Body', 5], ['cta', 'CTA', 2]].map(([field, label, rows]) => (
+              <div key={field}>
+                <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 flex items-center justify-between">
+                  <span>{label}</span>
+                  <button onClick={() => copyToClipboard(caption[field])} className="text-white/25 hover:text-white/60 transition-colors" title={`Copy ${label}`}><Copy size={11} /></button>
+                </label>
+                <textarea value={caption[field]} onChange={(e) => setCaption(p => ({ ...p, [field]: e.target.value }))} rows={rows} className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white outline-none focus:border-white/20 transition-colors resize-none" />
+              </div>
+            ))}
             <div>
               <label className="text-[10px] font-medium text-white/25 uppercase tracking-wider mb-1 flex items-center justify-between">
                 <span>Hashtags</span>
@@ -582,9 +741,22 @@ export default function EditorSidebar({
               </label>
               <textarea value={caption.hashtags} onChange={(e) => setCaption(p => ({ ...p, hashtags: e.target.value }))} rows={3} className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-xs text-white/60 outline-none focus:border-white/20 transition-colors resize-none" />
             </div>
-            <div className="text-[10px] text-white/20 text-right">
-              {`${caption.hook}\n\n${caption.body}\n\n${caption.cta}\n\n${caption.hashtags}`.length} / 2,200 chars
-            </div>
+            {(() => {
+              const totalLen = `${caption.hook}\n\n${caption.body}\n\n${caption.cta}\n\n${caption.hashtags}`.length;
+              const pct = Math.min(100, (totalLen / 2200) * 100);
+              const colorClass = totalLen > 2200 ? 'text-red-400' : totalLen > 1800 ? 'text-yellow-400/70' : 'text-white/20';
+              return (
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className={`text-[10px] ${colorClass}`}>{totalLen.toLocaleString()} / 2,200 chars</span>
+                    <span className="text-[9px] text-white/15">{Math.round(pct)}%</span>
+                  </div>
+                  <div className="h-1 bg-white/[0.06] rounded-full overflow-hidden">
+                    <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, backgroundColor: totalLen > 2200 ? '#f87171' : totalLen > 1800 ? '#facc15' : 'rgba(139,92,246,0.7)' }} />
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         )}
 
@@ -628,7 +800,12 @@ export default function EditorSidebar({
                     <span className={`text-[10px] ${text.length > 280 ? 'text-red-400' : text.length > 260 ? 'text-yellow-400/70' : 'text-white/20'}`}>
                       {text.length} / 280
                     </span>
-                    <button onClick={() => copyToClipboard(text)} className="text-[10px] text-white/30 hover:text-white/60 transition-colors">Copy</button>
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => copyToClipboard(text)} className="text-[10px] text-white/30 hover:text-white/60 transition-colors">Copy</button>
+                      {tweetMode === 'thread' && threadTweets.length > 1 && (
+                        <button onClick={() => { setter(prev => prev.filter((_, j) => j !== i)); }} className="text-[10px] text-white/20 hover:text-red-400 transition-colors"><Trash2 size={10} /></button>
+                      )}
+                    </div>
                   </div>
                 </div>
               );

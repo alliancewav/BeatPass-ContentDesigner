@@ -38,14 +38,23 @@ export const fetchPostBySlug = async (slug) => {
 };
 
 export const fetchPostByUrl = async (articleUrl) => {
-  const slug = new URL(articleUrl).pathname.replace(/^\/|\/$/g, '');
+  let parsed;
+  try {
+    parsed = new URL(articleUrl);
+  } catch {
+    throw new Error(`Invalid articleUrl: cannot extract slug from "${articleUrl}"`);
+  }
+  // Take the last non-empty path segment as the slug (Ghost always has slug as final segment)
+  const parts = parsed.pathname.replace(/\/+$/, '').split('/').filter(Boolean);
+  const slug = parts[parts.length - 1] || '';
+  if (!slug) throw new Error(`Invalid articleUrl: cannot extract slug from "${articleUrl}"`);
   return fetchPostBySlug(slug);
 };
 
 export const parsePostToArticle = (post) => {
   return {
     title: post.title || 'Untitled',
-    excerpt: post.excerpt || post.custom_excerpt || '',
+    excerpt: post.custom_excerpt || post.excerpt || '',
     html: post.html || '',
     featureImage: post.feature_image || null,
     readingTime: post.reading_time || 5,
@@ -54,6 +63,6 @@ export const parsePostToArticle = (post) => {
     slug: post.slug || '',
     url: post.url || '',
     publishedAt: post.published_at || null,
-    tags: (post.tags || []).map(t => t.slug || ''),
+    tags: (post.tags || []).map(t => t.slug).filter(Boolean),
   };
 };

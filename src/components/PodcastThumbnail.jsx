@@ -1,22 +1,18 @@
 // ─── Podcast YouTube Thumbnail ───
 // 1280×720 landscape thumbnail for YouTube.
-// Mirrors the PodcastCanvas (video) layout scaled to thumbnail dimensions
-// and uses the same dynamic theme system as carousel slides and stories.
-//
-// Design:
-//   - Header bar: favicon + logo (left), EP badge (right)
-//   - Center: cover art (left) + episode info (right)
-//   - Bottom: decorative waveform + accent bar
-//   - All colours from `theme.*` — never hardcoded
+// "Split Stage" layout: prominent cover art left, bold episode text right.
+// Full-bleed blurred cover art background with dark/theme overlay.
+// Episode subtitle (article title) is the hero text; show title is secondary.
+// All colours from `theme.*` — never hardcoded (shadows derive opacity from theme.bg).
 
 import React from 'react';
-import { Headphones } from 'lucide-react';
+import { Radio } from 'lucide-react';
+import { withAlpha, responsiveFontSize } from '../lib/colorUtils';
+import CONFIG from '../config';
 
 export const THUMB_W = 1280;
 export const THUMB_H = 720;
 
-// Scale factor from PodcastCanvas (1920×1080) → Thumbnail (1280×720) = 2/3
-const S = 2 / 3;
 
 export default function PodcastThumbnail({
   theme,
@@ -29,32 +25,40 @@ export default function PodcastThumbnail({
     subtitle = '',
     guestName = '',
     coverImage = null,
+    siteUrl = CONFIG.brand.domain,
   } = podcastMeta;
 
   const headingFont = "'JetBrains Mono', 'Geist', monospace";
   const bodyFont = "'Roboto', 'Geist', system-ui, -apple-system, sans-serif";
 
-  const usesDarkBackground = theme.logoVariant === 'light';
-  const logoSrc = usesDarkBackground ? imageCache.logoWhite : imageCache.logoBlack;
+  const usesDarkBg = theme.logoVariant === 'light';
+  const logoSrc = usesDarkBg ? imageCache.logoWhite : imageCache.logoBlack;
   const coverSrc = coverImage || imageCache.cover;
 
-  const PAD_X = Math.round(100 * S);   // 67
-  const PAD_BOTTOM = Math.round(72 * S); // 48
+  // Layout
+  const PAD_X = 68;
+  const PAD_TOP = 36;
+  const COVER_SIZE = 440;
+  const COVER_LEFT = PAD_X;
+  const COVER_TOP = (THUMB_H - COVER_SIZE) / 2 - 10;
+  const TEXT_LEFT = COVER_LEFT + COVER_SIZE + 60;
+  // TEXT_WIDTH = THUMB_W - TEXT_LEFT - PAD_X = 1280 - 568 - 68 = 644
+  const TEXT_WIDTH = THUMB_W - TEXT_LEFT - PAD_X;
 
-  // Title font size — scale from PodcastCanvas logic
-  const titleLen = title.length;
-  const titleFontSize = titleLen < 20 ? Math.round(78 * S)
-    : titleLen < 35 ? Math.round(66 * S)
-    : titleLen < 50 ? Math.round(56 * S)
-    : titleLen < 70 ? Math.round(48 * S)
-    : Math.round(40 * S);
+  const epStr = String(episodeNumber).padStart(2, '0');
 
-  // Cover size — scaled from 480 in PodcastCanvas
-  const coverSize = Math.round(480 * S); // 320
+  // Subtitle font size — scales with length, tuned for right-zone width (~644px)
+  const sl = subtitle ? subtitle.length : 0;
+  const subtitleFontSize = responsiveFontSize(sl, [[24,66],[40,56],[58,46],[80,38],[Infinity,32]]);
 
-  // Waveform bars — scaled from PodcastCanvas
-  const BAR_COUNT = 80;
-  const waveformBars = generateFallbackBars(title + episodeNumber, BAR_COUNT);
+  // Title (show name) font size when used as fallback primary (no subtitle)
+  const tl = title.length;
+  const titleOnlyFontSize = responsiveFontSize(tl, [[16,78],[26,66],[38,54],[52,44],[Infinity,36]]);
+
+  // Cover drop shadow — derived from theme.bg
+  const coverShadow = usesDarkBg
+    ? `0 12px 64px ${withAlpha(theme.bg, 0.72)}`
+    : `0 8px 40px ${withAlpha(theme.bg, 0.32)}`;
 
   return (
     <div
@@ -67,223 +71,157 @@ export default function PodcastThumbnail({
         color: theme.text,
         fontFamily: bodyFont,
         overflow: 'hidden',
-        display: 'flex',
-        flexDirection: 'column',
       }}
     >
-      {/* ── Blurred cover art background ── */}
+      {/* ── Full-bleed blurred cover art background ── */}
       {coverSrc && (
         <img
           src={coverSrc}
           alt=""
           style={{
             position: 'absolute', inset: 0, width: '100%', height: '100%',
-            objectFit: 'cover', filter: 'blur(60px) saturate(1.4)', transform: 'scale(1.3)',
+            objectFit: 'cover', filter: 'blur(60px) saturate(1.2)', transform: 'scale(1.15)',
             zIndex: 0,
           }}
         />
       )}
 
-      {/* ── Dark overlay (theme-based) ── */}
+      {/* ── Overlay ── */}
       <div style={{
         position: 'absolute', inset: 0, zIndex: 1,
-        background: usesDarkBackground
-          ? `linear-gradient(180deg, ${theme.bg}A8 0%, ${theme.bg}CC 50%, ${theme.bg}E6 100%)`
-          : `linear-gradient(180deg, ${theme.bg}CC 0%, ${theme.bg}E6 50%, ${theme.bg}F2 100%)`,
+        background: usesDarkBg
+          ? `linear-gradient(135deg, ${withAlpha(theme.bg, 0.70)} 0%, ${withAlpha(theme.bg, 0.80)} 100%)`
+          : `linear-gradient(135deg, ${withAlpha(theme.bg, 0.75)} 0%, ${withAlpha(theme.bg, 0.88)} 100%)`,
       }} />
 
-      {/* ── Subtle noise texture ── */}
+      {/* ── Cover art (left, clean — no ring) ── */}
       <div style={{
-        position: 'absolute', inset: 0, zIndex: 2, opacity: 0.03,
-        backgroundImage: usesDarkBackground
-          ? 'radial-gradient(circle, rgba(255,255,255,0.8) 1px, transparent 1px)'
-          : 'radial-gradient(circle, rgba(0,0,0,0.15) 1px, transparent 1px)',
-        backgroundSize: '4px 4px',
-      }} />
-
-      {/* ── Header Bar ── */}
-      <div style={{
-        position: 'relative', zIndex: 10,
-        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-        padding: `${Math.round(48 * S)}px ${PAD_X}px 0`,
-        boxSizing: 'border-box',
+        position: 'absolute',
+        left: COVER_LEFT, top: COVER_TOP,
+        width: COVER_SIZE, height: COVER_SIZE,
+        zIndex: 5,
+        borderRadius: 20,
+        overflow: 'hidden',
+        boxShadow: coverShadow,
       }}>
-        <div style={{ display: 'flex', alignItems: 'center' }}>
-          <img src={imageCache.favicon} alt="" style={{ width: Math.round(56 * S), height: Math.round(56 * S), objectFit: 'contain', marginRight: Math.round(16 * S), flexShrink: 0 }} />
-          <img src={logoSrc} alt="" style={{ height: Math.round(42 * S), width: 'auto', objectFit: 'contain', opacity: 0.9 }} />
-        </div>
-        <div style={{
-          backgroundColor: usesDarkBackground ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.08)',
-          color: theme.text,
-          borderRadius: 9999, padding: `${Math.round(14 * S)}px ${Math.round(30 * S)}px`,
-          display: 'inline-flex', alignItems: 'center', gap: Math.round(10 * S),
-          border: usesDarkBackground ? '1px solid rgba(255,255,255,0.12)' : '1px solid rgba(0,0,0,0.08)',
-        }}>
-          <Headphones size={Math.round(22 * S)} strokeWidth={2} style={{ opacity: 0.8 }} />
-          <span style={{ fontFamily: headingFont, fontSize: Math.round(24 * S), fontWeight: 700, lineHeight: 1, letterSpacing: '0.06em', textTransform: 'uppercase', opacity: 0.95 }}>
-            EP {episodeNumber}
-          </span>
-        </div>
-      </div>
-
-      {/* ── Main Content Area ── */}
-      <div style={{
-        position: 'relative', zIndex: 10,
-        flex: 1,
-        display: 'flex', alignItems: 'center',
-        padding: `0 ${PAD_X}px`,
-        gap: Math.round(72 * S),
-        boxSizing: 'border-box',
-      }}>
-        {/* Cover Art — 1:1 square with glow */}
-        {coverSrc && (
-          <div style={{ position: 'relative', flexShrink: 0 }}>
-            {/* Glow behind cover */}
-            <div style={{
-              position: 'absolute', inset: -16,
-              background: `radial-gradient(circle, ${theme.accent}30 0%, transparent 70%)`,
-              filter: 'blur(36px)',
-              zIndex: 0,
-            }} />
-            <div style={{
-              position: 'relative', zIndex: 1,
-              width: coverSize, height: coverSize,
-              borderRadius: Math.round(24 * S),
-              overflow: 'hidden',
-              boxShadow: usesDarkBackground
-                ? '0 20px 60px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.08)'
-                : '0 20px 60px rgba(0,0,0,0.2), 0 0 0 1px rgba(0,0,0,0.06)',
-            }}>
-              <img src={coverSrc} alt="" style={{
-                width: '100%', height: '100%', objectFit: 'cover', display: 'block',
-              }} />
-            </div>
-          </div>
-        )}
-        {/* Placeholder square when no cover */}
-        {!coverSrc && (
+        {coverSrc ? (
+          <img
+            src={coverSrc}
+            alt=""
+            style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+          />
+        ) : (
           <div style={{
-            width: coverSize, height: coverSize, flexShrink: 0,
-            borderRadius: Math.round(24 * S),
-            backgroundColor: usesDarkBackground ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
-            border: usesDarkBackground ? '1px solid rgba(255,255,255,0.08)' : '1px solid rgba(0,0,0,0.06)',
+            width: '100%', height: '100%',
+            backgroundColor: withAlpha(theme.accent, 0.094),
             display: 'flex', alignItems: 'center', justifyContent: 'center',
           }}>
-            <Headphones size={60} style={{ opacity: 0.15, color: theme.text }} />
+            <Radio size={88} color={theme.accent} opacity={0.35} />
           </div>
         )}
+      </div>
 
-        {/* Episode Info */}
-        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 0 }}>
-          {/* "Now Playing" label */}
-          <div style={{
+      {/* ── Text zone (right of cover art) ── */}
+      <div style={{
+        position: 'absolute',
+        left: TEXT_LEFT, top: 0,
+        width: TEXT_WIDTH,
+        height: THUMB_H,
+        zIndex: 5,
+        display: 'flex', flexDirection: 'column', justifyContent: 'center',
+        boxSizing: 'border-box',
+      }}>
+        {/* EP label */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
+          <div style={{ width: 32, height: 2.5, borderRadius: 9999, backgroundColor: theme.accent }} />
+          <span style={{
             fontFamily: headingFont,
-            fontSize: Math.round(20 * S), fontWeight: 700, letterSpacing: '0.22em', textTransform: 'uppercase',
-            color: theme.accent, marginBottom: Math.round(24 * S), opacity: 0.9,
+            fontSize: 13, fontWeight: 700,
+            letterSpacing: '0.2em', textTransform: 'uppercase',
+            color: theme.accent,
           }}>
-            Now Playing
-          </div>
+            PODCAST &nbsp;·&nbsp; EP {epStr}
+          </span>
+        </div>
 
-          {/* Podcast Title */}
+        {/* Episode subtitle (PRIMARY hero text) — article title */}
+        {subtitle ? (
           <h1 style={{
             fontFamily: headingFont,
-            fontSize: titleFontSize,
-            fontWeight: 800, lineHeight: 1.06,
-            margin: 0, marginBottom: Math.round(20 * S),
+            fontSize: subtitleFontSize,
+            fontWeight: 800, lineHeight: 1.1,
+            margin: 0, marginBottom: 22,
+            letterSpacing: '-0.02em',
             color: theme.text,
+            wordBreak: 'break-word',
+          }}>
+            {subtitle}
+          </h1>
+        ) : (
+          /* Fallback: show title as primary when no subtitle */
+          <h1 style={{
+            fontFamily: headingFont,
+            fontSize: titleOnlyFontSize,
+            fontWeight: 800, lineHeight: 1.05,
+            margin: 0, marginBottom: 0,
+            letterSpacing: '-0.02em',
+            color: theme.text,
+            wordBreak: 'break-word',
           }}>
             {title}
           </h1>
+        )}
 
-          {/* Episode subtitle / article title */}
-          {subtitle && (
-            <p style={{
-              fontSize: Math.round(32 * S), fontWeight: 400, lineHeight: 1.35,
-              color: theme.muted, margin: 0, marginBottom: Math.round(16 * S),
-              maxWidth: Math.round(780 * S),
-              opacity: 0.7,
-            }}>
-              {subtitle}
-            </p>
-          )}
+        {/* Show title (SECONDARY) — only shown when subtitle is present */}
+        {subtitle && (
+          <p style={{
+            fontFamily: bodyFont,
+            fontSize: 20, fontWeight: 500, lineHeight: 1.35,
+            margin: 0,
+            color: theme.muted,
+            opacity: 0.72,
+            letterSpacing: '0.01em',
+          }}>
+            {title}
+          </p>
+        )}
 
-          {/* Guest / Host name */}
-          {guestName && (
-            <div style={{
-              display: 'inline-flex', alignItems: 'center', gap: Math.round(12 * S),
-              marginTop: Math.round(6 * S),
-            }}>
-              <div style={{
-                width: Math.round(7 * S), height: Math.round(7 * S), borderRadius: 9999,
-                backgroundColor: theme.accent, opacity: 0.6,
-              }} />
-              <span style={{
-                fontSize: Math.round(26 * S), fontWeight: 500, letterSpacing: '0.02em',
-                color: theme.muted, opacity: 0.65,
-              }}>
-                {guestName}
-              </span>
-            </div>
-          )}
-        </div>
+        {/* Guest name */}
+        {guestName && (
+          <div style={{ marginTop: 22, display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ width: 28, height: 1.5, backgroundColor: theme.accent, opacity: 0.6 }} />
+            <span style={{ fontFamily: bodyFont, fontSize: 18, fontWeight: 600, color: theme.accent }}>
+              {guestName}
+            </span>
+          </div>
+        )}
       </div>
 
-      {/* ── Waveform + Accent Bar (bottom section) ── */}
+      {/* ── Header: logo left, site url right ── */}
       <div style={{
-        position: 'relative', zIndex: 10,
-        padding: `0 ${PAD_X}px ${PAD_BOTTOM}px`,
+        position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10,
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        padding: `${PAD_TOP}px ${PAD_X}px 0`,
         boxSizing: 'border-box',
       }}>
-        {/* Waveform visualization */}
-        <div style={{
-          display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
-          gap: 2, height: Math.round(48 * S), marginBottom: Math.round(16 * S),
-        }}>
-          {waveformBars.map((barH, i) => (
-            <div
-              key={i}
-              style={{
-                width: Math.max(2, Math.floor((THUMB_W - PAD_X * 2) / BAR_COUNT) - 2),
-                height: Math.max(3, Math.round(barH * S)),
-                borderRadius: 2,
-                backgroundColor: theme.accent,
-                opacity: 0.2,
-              }}
-            />
-          ))}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <img
+            src={imageCache.favicon} alt=""
+            style={{ width: 30, height: 30, objectFit: 'contain', flexShrink: 0 }}
+          />
+          <img
+            src={logoSrc} alt=""
+            style={{ height: 22, width: 'auto', objectFit: 'contain' }}
+          />
         </div>
-
-        {/* Accent progress bar (static — just a visual element) */}
-        <div style={{
-          width: '100%', height: Math.round(7 * S), borderRadius: 9999,
-          backgroundColor: usesDarkBackground ? `${theme.text}18` : `${theme.text}12`,
-          overflow: 'hidden', position: 'relative',
+        <span style={{
+          fontFamily: headingFont, fontSize: 12, fontWeight: 500,
+          letterSpacing: '0.08em', textTransform: 'uppercase',
+          color: theme.muted, opacity: 0.55,
         }}>
-          <div style={{
-            width: '35%', height: '100%', borderRadius: 9999,
-            backgroundColor: theme.accent,
-            opacity: 0.8,
-          }} />
-        </div>
+          {siteUrl}
+        </span>
       </div>
     </div>
   );
-}
-
-// Fallback: generate decorative waveform bar heights from a seed string
-function generateFallbackBars(seed, count = 80) {
-  const bars = [];
-  let hash = 0;
-  const str = seed || 'podcast';
-  for (let i = 0; i < str.length; i++) {
-    hash = ((hash << 5) - hash + str.charCodeAt(i)) | 0;
-  }
-  for (let i = 0; i < count; i++) {
-    hash = ((hash << 5) - hash + i * 7 + 13) | 0;
-    const normalized = Math.abs(hash % 100) / 100;
-    const centerWeight = 1 - Math.abs((i / count) - 0.5) * 0.6;
-    const height = 6 + Math.floor(normalized * 38 * centerWeight);
-    bars.push(height);
-  }
-  return bars;
 }

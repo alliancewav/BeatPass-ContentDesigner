@@ -1,9 +1,9 @@
 // ─── Top Bar ───
 // Editor header with undo/redo, shortcuts, new, and export dropdown.
 
-import React from 'react';
+import React, { useState } from 'react';
 import {
-  Undo2, Redo2, Keyboard, RotateCcw, Download, ChevronDown, Loader2, Menu, X,
+  Undo2, Redo2, Keyboard, RotateCcw, Download, ChevronDown, Loader2, Menu, X, Link,
 } from 'lucide-react';
 import ExportDropdown from './ExportDropdown';
 
@@ -40,7 +40,20 @@ export default function TopBar({
   onExportPodcast,
   onExportPodcastThumbnail,
   hasPodcastAudio,
+  slideCount = 0,
+  storyCount = 0,
 }) {
+  const [copied, setCopied] = useState(false);
+  const copyArticleUrl = () => {
+    if (!article?.url) return;
+    navigator.clipboard.writeText(article.url).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    }).catch((err) => {
+      console.error('Failed to copy URL:', err);
+    });
+  };
+
   return (
     <div className="flex-none h-[50px] md:h-[58px] border-b border-border flex items-center justify-between px-2 md:px-4 z-30 bg-surface">
       <div className="flex items-center gap-2 md:gap-3 min-w-0">
@@ -49,8 +62,19 @@ export default function TopBar({
         </button>
         <img src={imageCache.favicon} className="w-5 h-5 md:w-6 md:h-6 rounded flex-shrink-0" alt="" />
         <span className="text-sm font-semibold text-white/70 hidden sm:inline">Content Designer</span>
-        <span className="text-white/20 hidden md:inline">·</span>
-        <span className="text-xs text-white/30 truncate max-w-[200px] hidden md:inline">{article?.title}</span>
+        {article?.title && (
+          <>
+            <span className="text-white/20 hidden md:inline">·</span>
+            <button
+              onClick={copyArticleUrl}
+              className="hidden md:flex items-center gap-1.5 text-xs text-white/30 hover:text-white/60 transition-colors max-w-[200px] truncate"
+              title={copied ? 'Copied!' : `Copy article URL: ${article?.url}`}
+            >
+              <Link size={10} className={copied ? 'text-green-400' : ''} />
+              <span className={`truncate ${copied ? 'text-green-400' : ''}`}>{copied ? 'Copied!' : article.title}</span>
+            </button>
+          </>
+        )}
       </div>
       <div className="flex items-center gap-1 md:gap-2">
         <button onClick={undo} className="p-1.5 rounded-aspect-sm text-fg-muted hover:text-fg-contrast hover:bg-surface-100 transition-all disabled:opacity-15 hidden sm:block" title="Undo (Ctrl+Z)" disabled={!canUndo}>
@@ -89,6 +113,8 @@ export default function TopBar({
                 onExportPodcast={onExportPodcast}
                 onExportPodcastThumbnail={onExportPodcastThumbnail}
                 hasPodcastAudio={hasPodcastAudio}
+                slideCount={slideCount}
+                storyCount={storyCount}
                 onClose={() => setExportMenuOpen(false)}
               />
             </>

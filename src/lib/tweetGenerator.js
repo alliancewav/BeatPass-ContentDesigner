@@ -26,6 +26,15 @@ const SINGLE_TEMPLATES = [
   (title, url) => `${title}\n\nFull breakdown on the blog:\n${url}`,
   (title, url) => `📌 ${title}\n\n${url}`,
   (title, url) => `Just published: ${title}\n\nCheck it out → ${url}`,
+  (title, url) => `If you're serious about music production, read this:\n\n${title}\n\n${url}`,
+  (title, url) => `Save this 👇\n\n${title}\n\n${url}`,
+  (title, url) => `📖 New article: ${title}\n\n${url}`,
+  (title, url) => `Drop everything and read this.\n\n${title}\n\n${url}`,
+  (title, url) => `This one is for the producers:\n\n${title}\n\n${url}`,
+  (title, url) => `Bookmark this 🔖\n\n${title}\n\n${url}`,
+  (title, url) => `Here's what I learned about ${title.toLowerCase()}:\n\n${url}`,
+  (title, url) => `New post just dropped 🎯\n\n${title}\n\n${url}`,
+  (title, url) => `Worth your 5 minutes:\n\n${title}\n\n${url}`,
 ];
 
 // ── Thread Hook Templates (no URL) ──
@@ -34,6 +43,12 @@ const THREAD_HOOKS = [
   (title) => `Let's talk about ${title.toLowerCase()}.\n\nThread 🧵👇`,
   (title) => `${title}\n\nHere's everything you need to know 🧵`,
   (title) => `Most people get ${title.toLowerCase()} wrong.\n\nLet me break it down 🧵`,
+  (title) => `Nobody talks about this enough:\n\n${title}\n\nThread 👇🧵`,
+  (title) => `Quick thread on ${title.toLowerCase()} 🧵`,
+  (title) => `${title} — a producer's guide.\n\nThread 🧵`,
+  (title) => `I wrote about ${title.toLowerCase()}.\n\nHere are the key points 👇`,
+  (title) => `${title.toLowerCase()} — broken down into simple steps 🧵`,
+  (title) => `The truth about ${title.toLowerCase()}.\n\nA thread 🧵`,
 ];
 
 // ── Thread CTA Templates (with URL) ──
@@ -50,16 +65,32 @@ const fitToLimit = (text, hasUrl = false) => {
   return truncate(text, budget);
 };
 
+// ── Excerpt-enhanced tweet templates ──
+const EXCERPT_TEMPLATES = [
+  (title, excerpt, url) => `${title}\n\n${truncate(excerpt, 120)}\n\n${url}`,
+  (title, excerpt, url) => `📖 ${title}\n\n"${truncate(excerpt, 110)}"\n\n${url}`,
+  (_title, excerpt, url) => `New post:\n\n${truncate(excerpt, 140)}\n\n→ ${url}`,
+];
+
 // ── Public: Generate single tweet variations ──
 export const generateTweet = (article) => {
   if (!article) return [''];
 
   const title = article.title || 'Untitled';
   const url = buildUrl(article.slug);
+  const excerpt = (article.excerpt || '').trim();
 
-  // Generate 3 variations
+  // Generate 3 variations — mix title-only and excerpt-enhanced templates
   const used = new Set();
   const results = [];
+
+  // Add one excerpt-based tweet if excerpt is available (tweet #1 of 3)
+  if (excerpt.length > 40) {
+    const exTpl = pick(EXCERPT_TEMPLATES);
+    const exTweet = exTpl(truncate(title, 60), excerpt, url);
+    const exLen = exTweet.replace(url, 'x'.repeat(T_CO_LEN)).length;
+    if (exLen <= MAX_CHARS) results.push(exTweet);
+  }
 
   while (results.length < 3 && used.size < SINGLE_TEMPLATES.length) {
     const idx = Math.floor(Math.random() * SINGLE_TEMPLATES.length);

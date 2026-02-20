@@ -5,6 +5,7 @@ import PasswordGate from './components/PasswordGate';
 import ArticleFetcher from './components/ArticleFetcher';
 import SlideCanvas from './components/SlideCanvas';
 import ThumbnailStrip from './components/ThumbnailStrip';
+import StoryThumbnailStrip from './components/StoryThumbnailStrip';
 import StoryCanvas from './components/StoryCanvas';
 import TopBar from './components/TopBar';
 import EditorSidebar from './components/EditorSidebar';
@@ -24,6 +25,7 @@ import CONFIG from './config';
 export default function App() {
   const [authenticated, setAuthenticated] = useState(false);
   const [mode, setMode] = useState('input');
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
   // Slides state
   const [slides, setSlides] = useState([]);
@@ -86,8 +88,6 @@ export default function App() {
     historyIndexRef.current = historyRef.current.length - 1;
     setHistoryVersion(v => v + 1);
   }, []);
-
-  const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
   // Refs
   const previewContainerRef = useRef(null);
@@ -225,6 +225,45 @@ export default function App() {
     fetchSettings();
   }, []);
 
+  const duplicateCurrentSlide = useCallback(() => {
+    const src = slides[currentIndex];
+    const dupe = { ...src, id: `slide-dup-${Date.now()}-${Math.random().toString(36).slice(2, 7)}` };
+    const newSlides = [...slides];
+    newSlides.splice(currentIndex + 1, 0, dupe);
+    let num = 0;
+    newSlides.forEach((s) => {
+      if (s.type === 'content') { num++; s.number = num; }
+    });
+    setSlides(newSlides);
+    setCurrentIndex(currentIndex + 1);
+  }, [slides, currentIndex]);
+
+  // ── Global keyboard shortcuts ──
+  useEffect(() => {
+    if (mode !== 'editor') return;
+    const handler = (e) => {
+      // Skip when focus is in an input/textarea/contenteditable
+      const tag = (e.target?.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || e.target?.isContentEditable) return;
+
+      const isStories = editorTab === 'stories';
+
+      if (e.key === 'ArrowLeft') {
+        if (isStories) setCurrentStoryIndex(i => Math.max(0, i - 1));
+        else setCurrentIndex(i => Math.max(0, i - 1));
+      } else if (e.key === 'ArrowRight') {
+        if (isStories) setCurrentStoryIndex(i => Math.min((storyFrames.length || 1) - 1, i + 1));
+        else setCurrentIndex(i => Math.min((slides.length || 1) - 1, i + 1));
+      } else if (e.key === 'd' || e.key === 'D') {
+        if (!isStories && slides[currentIndex]) {
+          duplicateCurrentSlide();
+        }
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [mode, editorTab, slides, storyFrames, currentIndex, currentStoryIndex, duplicateCurrentSlide]);
+
   // ── Resolve the best color-source image for an article ──
   // For video articles (#video/#video-preview): prefer YouTube thumbnail over edisc feature image
   // For regular articles: feature image > YouTube thumbnail from HTML > first slide video
@@ -337,6 +376,28 @@ export default function App() {
     return () => window.removeEventListener('resize', handleResize);
   }, [mode, aspectRatio, editorTab, previewH]);
 
+  // ── Auto-save to localStorage (debounced 2s) ──
+  const autoSaveTimerRef = useRef(null);
+  useEffect(() => {
+    if (mode !== 'editor' || !slides.length) return;
+    clearTimeout(autoSaveTimerRef.current);
+    autoSaveTimerRef.current = setTimeout(() => {
+      try {
+        const draft = {
+          v: 2, savedAt: Date.now(),
+          articleUrl: article?.url || null,
+          articleTitle: article?.title || null,
+          slides, storyFrames, activeThemeId, aspectRatio, density,
+          coverOverride, coverYouTubeId, coverMediaMode, coverInputUrl,
+          podcastMeta, caption, tweetMode, tweets, threadTweets,
+        };
+        localStorage.setItem('cd-last-draft', JSON.stringify(draft));
+      } catch (_) {}
+    }, 2000);
+    return () => clearTimeout(autoSaveTimerRef.current);
+  }, [mode, slides, storyFrames, activeThemeId, aspectRatio, density,
+      coverOverride, coverYouTubeId, coverMediaMode, coverInputUrl, article, podcastMeta, caption, tweets, threadTweets]);
+
   // ── Handlers ──
   const handleSlidesGenerated = useCallback((newSlides, newArticle, newDensity) => {
     setSlides(newSlides);
@@ -367,6 +428,13 @@ export default function App() {
     setMode('editor');
   }, []);
 
+  // Regenerate story frames from current article + slides
+  const handleRegenerateStories = useCallback(() => {
+    if (!article) return;
+    setStoryFrames(generateStories(article, slides));
+    setCurrentStoryIndex(0);
+  }, [article, slides]);
+
   // Start blank mode (no article)
   const handleStartBlank = useCallback(() => {
     const blankSlides = [
@@ -390,22 +458,65 @@ export default function App() {
     setMode('editor');
   }, []);
 
+  // Restore a previously saved draft from localStorage
+  const handleRestoreDraft = useCallback((draft) => {
+    if (!draft?.slides?.length) return;
+    setSlides(draft.slides);
+    setStoryFrames(draft.storyFrames || []);
+    setActiveThemeId(draft.activeThemeId || 'aspectDark');
+    setAspectRatio(draft.aspectRatio || 'portrait');
+    setDensity(draft.density || 'balanced');
+    setCoverOverride(draft.coverOverride || null);
+    setCoverYouTubeId(draft.coverYouTubeId || null);
+    setCoverMediaMode(draft.coverMediaMode || 'thumbnail');
+    setCoverInputUrl(draft.coverInputUrl || '');
+    setPodcastMeta(draft.podcastMeta || { title: 'BeatPass Podcast', episodeNumber: 1, subtitle: '', guestName: '', audioDuration: 0, coverImage: null });
+    setCaption(draft.caption || { hook: '', body: '', cta: '', hashtags: '' });
+    setTweetMode(draft.tweetMode || 'single');
+    setTweets(draft.tweets || []);
+    setThreadTweets(draft.threadTweets || []);
+    setArticle(draft.articleUrl ? { url: draft.articleUrl, title: draft.articleTitle } : null);
+    setCurrentIndex(0);
+    setCurrentStoryIndex(0);
+    setEditorTab('slides');
+    setMode('editor');
+  }, []);
+
   // Regenerate slides from the same article with a new density
+  // Preserves user edits by matching on title when possible
   const handleRegenerate = useCallback((newDensity) => {
     if (!article) return;
     const d = newDensity || density;
     setDensity(d);
     const newSlides = generateSlides(article, { density: d });
-    setSlides(newSlides);
+    // Preserve user-editable overrides from existing slides (matched by title)
+    const USER_FIELDS = ['fontSizeOverride', 'parallaxPosition', 'subHeadingLabel', 'imageCaption', 'calloutIsQuote', 'calloutEmoji', 'calloutText'];
+    const existingByTitle = {};
+    for (const s of slides) {
+      if (s.title) existingByTitle[s.title.trim().toLowerCase()] = s;
+    }
+    const mergedSlides = newSlides.map(ns => {
+      const key = (ns.title || '').trim().toLowerCase();
+      const prev = existingByTitle[key];
+      if (!prev) return ns;
+      const overrides = {};
+      for (const f of USER_FIELDS) {
+        if (prev[f] != null && prev[f] !== '') {
+          overrides[f] = prev[f];
+        }
+      }
+      return Object.keys(overrides).length > 0 ? { ...ns, ...overrides } : ns;
+    });
+    setSlides(mergedSlides);
     setCurrentIndex(0);
     // Regenerate companion content
-    setStoryFrames(generateStories(article, newSlides));
+    setStoryFrames(generateStories(article, mergedSlides));
     setCurrentStoryIndex(0);
-    const cap = generateCaption(article, newSlides);
+    const cap = generateCaption(article, mergedSlides);
     setCaption(cap);
     setTweets(generateTweet(article));
-    setThreadTweets(generateThread(article, newSlides));
-  }, [article, density]);
+    setThreadTweets(generateThread(article, mergedSlides));
+  }, [article, density, slides]);
 
   const handleReset = () => {
     setMode('input');
@@ -565,10 +676,27 @@ export default function App() {
           setCurrentIndex(currentIndex + 1);
         }
       }
+      // Reorder stories: Alt+← / Alt+→
+      if (e.altKey && !mod && !isInput && editorTab === 'stories') {
+        if (e.key === 'ArrowLeft' && currentStoryIndex > 0) {
+          e.preventDefault();
+          const nf = [...storyFrames];
+          [nf[currentStoryIndex - 1], nf[currentStoryIndex]] = [nf[currentStoryIndex], nf[currentStoryIndex - 1]];
+          setStoryFrames(nf);
+          setCurrentStoryIndex(currentStoryIndex - 1);
+        }
+        if (e.key === 'ArrowRight' && currentStoryIndex < storyFrames.length - 1) {
+          e.preventDefault();
+          const nf = [...storyFrames];
+          [nf[currentStoryIndex], nf[currentStoryIndex + 1]] = [nf[currentStoryIndex + 1], nf[currentStoryIndex]];
+          setStoryFrames(nf);
+          setCurrentStoryIndex(currentStoryIndex + 1);
+        }
+      }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [mode, slides, currentIndex, editorTab, isStoryView, storyFrames.length, undo, redo]);
+  }, [mode, slides, currentIndex, editorTab, isStoryView, storyFrames, currentStoryIndex, undo, redo]);
 
   const updateStoryField = useCallback((field, value) => {
     setStoryFrames(prev => prev.map((s, i) => i === currentStoryIndex ? { ...s, [field]: value } : s));
@@ -592,10 +720,11 @@ export default function App() {
   };
 
   const addSlideAfter = () => {
-    const contentCount = slides.filter((s) => s.type === 'content').length;
-    const newSlide = createBlankSlide('content', contentCount + 1);
+    const newSlide = createBlankSlide('content', 1);
     const newSlides = [...slides];
     newSlides.splice(currentIndex + 1, 0, newSlide);
+    let num = 0;
+    newSlides.forEach((s) => { if (s.type === 'content') { num++; s.number = num; } });
     setSlides(newSlides);
     setCurrentIndex(currentIndex + 1);
   };
@@ -611,18 +740,25 @@ export default function App() {
     setCurrentIndex(Math.max(0, currentIndex - 1));
   };
 
-  const duplicateCurrentSlide = () => {
-    const src = slides[currentIndex];
-    const dupe = { ...src, id: `slide-dup-${Date.now()}-${Math.random().toString(36).substr(2, 5)}` };
-    const newSlides = [...slides];
-    newSlides.splice(currentIndex + 1, 0, dupe);
-    let num = 0;
-    newSlides.forEach((s) => {
-      if (s.type === 'content') { num++; s.number = num; }
-    });
-    setSlides(newSlides);
-    setCurrentIndex(currentIndex + 1);
+  const handleReorderStories = (fromIndex, toIndex) => {
+    const newFrames = [...storyFrames];
+    const [moved] = newFrames.splice(fromIndex, 1);
+    newFrames.splice(toIndex, 0, moved);
+    setStoryFrames(newFrames);
+    setCurrentStoryIndex(toIndex);
   };
+
+  const handleReorderSlides = (fromIndex, toIndex) => {
+    const newSlides = [...slides];
+    const [moved] = newSlides.splice(fromIndex, 1);
+    newSlides.splice(toIndex, 0, moved);
+    let num = 0;
+    newSlides.forEach((s) => { if (s.type === 'content') { num++; s.number = num; } });
+    pushHistory(newSlides);
+    setSlides(newSlides);
+    setCurrentIndex(toIndex);
+  };
+
 
   // ── Auth gate ──
   if (!authenticated) {
@@ -634,7 +770,7 @@ export default function App() {
     return (
       <div className="fixed inset-0 bg-neutral-950 flex flex-col">
         <Header imageCache={imageCache} />
-        <ArticleFetcher onSlidesGenerated={handleSlidesGenerated} onStartBlank={handleStartBlank} />
+        <ArticleFetcher onSlidesGenerated={handleSlidesGenerated} onStartBlank={handleStartBlank} onRestoreDraft={handleRestoreDraft} />
       </div>
     );
   }
@@ -672,6 +808,8 @@ export default function App() {
         onExportPodcast={exportH.handleExportPodcast}
         onExportPodcastThumbnail={exportH.handleExportPodcastThumbnail}
         hasPodcastAudio={!!podcastAudioFile}
+        slideCount={slides.length}
+        storyCount={storyFrames.length}
       />
 
       {/* Main editor area */}
@@ -714,6 +852,7 @@ export default function App() {
           currentStoryIndex={currentStoryIndex}
           setCurrentStoryIndex={setCurrentStoryIndex}
           onUpdateStoryField={updateStoryField}
+          onRegenerateStories={handleRegenerateStories}
           caption={caption}
           setCaption={setCaption}
           tweetMode={tweetMode}
@@ -738,13 +877,14 @@ export default function App() {
         {/* ── Center Preview ── */}
         <div className="flex-1 flex flex-col min-w-0">
           <div ref={previewContainerRef} className="flex-1 flex items-center justify-center relative overflow-hidden">
-            <div className="absolute inset-0 pointer-events-none opacity-[0.03]" style={{ backgroundImage: 'radial-gradient(#fff 1px, transparent 1px)', backgroundSize: '20px 20px' }} />
+            <div className="absolute inset-0 pointer-events-none opacity-[0.04]" style={{ backgroundImage: 'radial-gradient(#fff 1px, transparent 1px)', backgroundSize: '24px 24px' }} />
+            <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse 70% 60% at 50% 50%, transparent 40%, rgba(0,0,0,0.35) 100%)' }} />
 
             {/* Slides / Stories preview */}
             {(editorTab === 'slides' || editorTab === 'caption' || editorTab === 'twitter') && (
               <div className="flex items-center gap-1 sm:gap-4 z-10 relative px-1 sm:px-0">
-                <button onClick={() => setCurrentIndex(Math.max(0, currentIndex - 1))} disabled={currentIndex === 0} className="p-1.5 sm:p-3 bg-white/[0.06] border border-white/[0.08] rounded-full text-white/60 disabled:opacity-20 hover:bg-white/[0.1] transition-all flex-shrink-0"><ArrowLeft size={16} /></button>
-                <div className="relative slide-shadow rounded-sm" style={{ width: previewW * scale, height: previewH * scale }}>
+                <button onClick={() => setCurrentIndex(Math.max(0, currentIndex - 1))} disabled={currentIndex === 0} className="p-1.5 sm:p-3 bg-white/[0.06] border border-white/[0.08] rounded-full text-white/60 disabled:opacity-20 hover:bg-white/[0.1] transition-all flex-shrink-0" title="Previous slide (← Arrow)"><ArrowLeft size={16} /></button>
+                <div key={currentIndex} className="relative slide-shadow rounded-sm animate-fade-in" style={{ width: previewW * scale, height: previewH * scale }}>
                   <div className="absolute top-0 left-0 origin-top-left" style={{ width: previewW, height: previewH, transform: `scale(${scale})` }}>
                     <SlideCanvas slide={currentSlide} index={currentIndex} totalSlides={slides.length} theme={resolvedTheme} aspectRatio={aspectRatio} imageCache={imageCache} coverYouTubeId={coverYouTubeId} coverMediaMode={coverMediaMode} />
                   </div>
@@ -752,14 +892,37 @@ export default function App() {
                     <button onClick={exportH.handleExportSingle} disabled={exportH.exporting} className="p-2 bg-black/70 text-white rounded-lg hover:bg-black backdrop-blur-sm border border-white/10" title="Download this slide"><Download size={16} /></button>
                   </div>
                 </div>
-                <button onClick={() => setCurrentIndex(Math.min(slides.length - 1, currentIndex + 1))} disabled={currentIndex === slides.length - 1} className="p-1.5 sm:p-3 bg-white/[0.06] border border-white/[0.08] rounded-full text-white/60 disabled:opacity-20 hover:bg-white/[0.1] transition-all flex-shrink-0"><ArrowRight size={16} /></button>
+                <button onClick={() => setCurrentIndex(Math.min(slides.length - 1, currentIndex + 1))} disabled={currentIndex === slides.length - 1} className="p-1.5 sm:p-3 bg-white/[0.06] border border-white/[0.08] rounded-full text-white/60 disabled:opacity-20 hover:bg-white/[0.1] transition-all flex-shrink-0" title="Next slide (→ Arrow)"><ArrowRight size={16} /></button>
+              </div>
+            )}
+            {/* Slide counter */}
+            {(editorTab === 'slides' || editorTab === 'caption' || editorTab === 'twitter') && slides.length > 0 && (
+              <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex items-center gap-1.5 z-20">
+                <span className="text-[10px] font-mono text-white/25">
+                  {currentIndex + 1} <span className="text-white/12">/</span> {slides.length}
+                </span>
+                {currentSlide?.type === 'cover' && (
+                  <span className="text-[9px] font-mono text-amber-400/40 border border-amber-400/15 rounded px-1.5 py-0.5">cover</span>
+                )}
+                {currentSlide?.type === 'cta' && (
+                  <span className="text-[9px] font-mono text-amber-400/40 border border-amber-400/15 rounded px-1.5 py-0.5">cta</span>
+                )}
+                {currentSlide?.subtype && (
+                  <span className="text-[9px] font-mono text-violet-400/40 border border-violet-400/15 rounded px-1.5 py-0.5">{currentSlide.subtype}</span>
+                )}
+                {currentSlide?.isContinuation && (
+                  <span className="text-[9px] font-mono text-white/20 border border-white/10 rounded px-1.5 py-0.5">cont.</span>
+                )}
+                {currentSlide?.subHeadingLabel && (
+                  <span className="text-[9px] font-mono text-violet-400/40 border border-violet-400/15 rounded px-1.5 py-0.5">h3</span>
+                )}
               </div>
             )}
 
             {editorTab === 'stories' && storyFrames.length > 0 && (
               <div className="flex items-center gap-1 sm:gap-4 z-10 relative px-1 sm:px-0">
-                <button onClick={() => setCurrentStoryIndex(Math.max(0, currentStoryIndex - 1))} disabled={currentStoryIndex === 0} className="p-1.5 sm:p-3 bg-white/[0.06] border border-white/[0.08] rounded-full text-white/60 disabled:opacity-20 hover:bg-white/[0.1] transition-all flex-shrink-0"><ArrowLeft size={16} /></button>
-                <div className="relative slide-shadow rounded-sm" style={{ width: previewW * scale, height: previewH * scale }}>
+                <button onClick={() => setCurrentStoryIndex(Math.max(0, currentStoryIndex - 1))} disabled={currentStoryIndex === 0} className="p-1.5 sm:p-3 bg-white/[0.06] border border-white/[0.08] rounded-full text-white/60 disabled:opacity-20 hover:bg-white/[0.1] transition-all flex-shrink-0" title="Previous story (← Arrow)"><ArrowLeft size={16} /></button>
+                <div key={currentStoryIndex} className="relative slide-shadow rounded-sm animate-fade-in" style={{ width: previewW * scale, height: previewH * scale }}>
                   <div className="absolute top-0 left-0 origin-top-left" style={{ width: previewW, height: previewH, transform: `scale(${scale})` }}>
                     <StoryCanvas frame={storyFrames[currentStoryIndex]} index={currentStoryIndex} totalFrames={storyFrames.length} theme={resolvedTheme} imageCache={imageCache} coverOverride={coverOverride} coverYouTubeId={coverYouTubeId} coverMediaMode={coverMediaMode} />
                   </div>
@@ -767,7 +930,20 @@ export default function App() {
                     <button onClick={exportH.handleExportStory} disabled={exportH.exporting} className="p-2 bg-black/70 text-white rounded-lg hover:bg-black backdrop-blur-sm border border-white/10" title="Download this story"><Download size={16} /></button>
                   </div>
                 </div>
-                <button onClick={() => setCurrentStoryIndex(Math.min(storyFrames.length - 1, currentStoryIndex + 1))} disabled={currentStoryIndex === storyFrames.length - 1} className="p-1.5 sm:p-3 bg-white/[0.06] border border-white/[0.08] rounded-full text-white/60 disabled:opacity-20 hover:bg-white/[0.1] transition-all flex-shrink-0"><ArrowRight size={16} /></button>
+                <button onClick={() => setCurrentStoryIndex(Math.min(storyFrames.length - 1, currentStoryIndex + 1))} disabled={currentStoryIndex === storyFrames.length - 1} className="p-1.5 sm:p-3 bg-white/[0.06] border border-white/[0.08] rounded-full text-white/60 disabled:opacity-20 hover:bg-white/[0.1] transition-all flex-shrink-0" title="Next story (→ Arrow)"><ArrowRight size={16} /></button>
+              </div>
+            )}
+            {/* Story counter */}
+            {editorTab === 'stories' && storyFrames.length > 0 && (
+              <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5">
+                <span className="text-[10px] font-mono text-white/25">
+                  {currentStoryIndex + 1} <span className="text-white/12">/</span> {storyFrames.length}
+                </span>
+                {storyFrames[currentStoryIndex]?.type && (
+                  <span className="text-[9px] font-mono text-violet-400/40 border border-violet-400/15 rounded px-1.5 py-0.5">
+                    {storyFrames[currentStoryIndex].type}
+                  </span>
+                )}
               </div>
             )}
 
@@ -849,26 +1025,19 @@ export default function App() {
                 1920×1080 HD · Podcast Video
               </div>
             ) : editorTab === 'stories' ? (
-              <div className="flex gap-1.5 md:gap-2 overflow-x-auto py-1 md:py-2 px-1" style={{ scrollbarWidth: 'none', WebkitOverflowScrolling: 'touch' }}>
-                {storyFrames.map((sf, i) => (
-                  <button
-                    key={sf.id}
-                    onClick={() => setCurrentStoryIndex(i)}
-                    className={`flex-shrink-0 rounded-lg border-2 transition-all overflow-hidden relative ${
-                      i === currentStoryIndex
-                        ? 'border-violet-500 ring-2 ring-violet-500/30 scale-105'
-                        : 'border-white/[0.06] hover:border-white/20 opacity-60 hover:opacity-100'
-                    }`}
-                    style={{ width: 36, height: 64 }}
-                  >
-                    <div style={{ width: 1080, height: 1920, transform: `scale(${36 / 1080})`, transformOrigin: 'top left', pointerEvents: 'none' }}>
-                      <StoryCanvas frame={sf} index={i} totalFrames={storyFrames.length} theme={resolvedTheme} imageCache={imageCache} coverOverride={coverOverride} coverYouTubeId={coverYouTubeId} coverMediaMode={coverMediaMode} />
-                    </div>
-                  </button>
-                ))}
-              </div>
+              <StoryThumbnailStrip
+                frames={storyFrames}
+                currentIndex={currentStoryIndex}
+                onSelect={setCurrentStoryIndex}
+                onReorder={handleReorderStories}
+                theme={resolvedTheme}
+                imageCache={imageCache}
+                coverOverride={coverOverride}
+                coverYouTubeId={coverYouTubeId}
+                coverMediaMode={coverMediaMode}
+              />
             ) : (
-              <ThumbnailStrip slides={slides} currentIndex={currentIndex} onSelect={setCurrentIndex} theme={resolvedTheme} aspectRatio={aspectRatio} imageCache={imageCache} />
+              <ThumbnailStrip slides={slides} currentIndex={currentIndex} onSelect={setCurrentIndex} onReorder={handleReorderSlides} theme={resolvedTheme} aspectRatio={aspectRatio} imageCache={imageCache} />
             )}
           </div>
         </div>
@@ -1058,21 +1227,29 @@ export default function App() {
                 <h3 className="text-sm font-semibold text-fg-contrast">Keyboard Shortcuts</h3>
                 <button onClick={() => setShortcutsOpen(false)} className="p-1 rounded-aspect-sm text-fg-muted hover:text-fg-contrast hover:bg-surface-200 transition-colors"><X size={16} /></button>
               </div>
-              <div className="px-5 py-4 space-y-3">
+              <div className="px-5 py-4 space-y-1">
                 {[
-                  ['←  /  →', 'Navigate slides'],
-                  ['Alt + ←  /  →', 'Reorder slide'],
+                  ['Navigation', null],
+                  ['← / →', 'Navigate slides / stories'],
+                  ['Reorder', null],
+                  ['Alt + ←', 'Move slide / story left'],
+                  ['Alt + →', 'Move slide / story right'],
+                  ['History', null],
                   ['Ctrl + Z', 'Undo'],
                   ['Ctrl + Shift + Z', 'Redo'],
-                ].map(([key, desc]) => (
-                  <div key={key} className="flex items-center justify-between">
-                    <span className="text-xs text-fg">{desc}</span>
-                    <kbd className="text-[10px] font-mono text-fg-secondary bg-surface-200 border border-border px-2 py-1 rounded">{key}</kbd>
+                ].map(([key, desc], i) => desc === null ? (
+                  <div key={i} className="pt-2 pb-0.5">
+                    <span className="text-[9px] font-semibold uppercase tracking-wider text-white/20">{key}</span>
+                  </div>
+                ) : (
+                  <div key={i} className="flex items-center justify-between py-1">
+                    <span className="text-xs text-fg-secondary">{desc}</span>
+                    <kbd className="text-[10px] font-mono text-fg-secondary bg-surface-200 border border-border px-2 py-0.5 rounded">{key}</kbd>
                   </div>
                 ))}
               </div>
               <div className="px-5 py-3 border-t border-border">
-                <p className="text-[10px] text-fg-muted">Shortcuts are disabled when a text input is focused.</p>
+                <p className="text-[10px] text-fg-muted">Shortcuts disabled while typing in a text field.</p>
               </div>
             </div>
           </div>

@@ -8,9 +8,10 @@ import {
   Megaphone, Zap, Eye, BookOpen, Lightbulb, Star,
   MessageCircle, Share2, Link2, Sparkles, AlertCircle,
   Heart, TrendingUp, Music, Headphones, Mic2, Radio,
-  Gift, Trophy, Target, Bookmark, Hash, AtSign,
+  Gift, Trophy, Target, Bookmark, Hash, AtSign, Bell, CheckCircle,
 } from 'lucide-react';
 import CONFIG from '../config';
+import { withAlpha } from '../lib/colorUtils';
 
 const W = 1080;
 const H = 1920;
@@ -55,6 +56,8 @@ export const ICON_MAP = {
   bookmark: Bookmark,
   hash: Hash,
   atSign: AtSign,
+  bell: Bell,
+  checkCircle: CheckCircle,
 };
 
 // Icon display names for the picker
@@ -74,6 +77,18 @@ const resolveIcon = (name, size = 48, style = {}) => {
 
 // YouTube ID validation
 const isValidYouTubeId = (id) => /^[A-Za-z0-9_-]{11}$/.test(id);
+
+// CTA hero text font size — adaptive by char count
+function getCtaHeroFontSize(text) {
+  const tl = (text || '').length;
+  if (tl < 30) return 110;
+  if (tl < 45) return 96;
+  if (tl < 60) return 86;
+  if (tl < 80) return 76;
+  if (tl < 110) return 66;
+  if (tl < 140) return 58;
+  return 52;
+}
 
 export default function StoryCanvas({ frame, index, totalFrames, theme, imageCache, coverOverride, coverYouTubeId = null, coverMediaMode = 'thumbnail', isExport = false }) {
   if (!frame) return null;
@@ -137,31 +152,36 @@ export default function StoryCanvas({ frame, index, totalFrames, theme, imageCac
           <div style={{
             position: 'absolute', inset: 0, zIndex: 2,
             background: usesDarkBackground
-              ? `linear-gradient(to top, ${theme.bg} 20%, ${theme.bg}E6 50%, ${theme.bg}99 70%, transparent 100%)`
-              : `linear-gradient(to top, ${theme.bg} 30%, ${theme.bg}F2 55%, ${theme.bg}CC 80%, ${theme.bg}99 100%)`,
+              ? `linear-gradient(to top, ${theme.bg} 20%, ${withAlpha(theme.bg, 0.90)} 50%, ${withAlpha(theme.bg, 0.60)} 70%, transparent 100%)`
+              : `linear-gradient(to top, ${theme.bg} 30%, ${withAlpha(theme.bg, 0.95)} 55%, ${withAlpha(theme.bg, 0.80)} 80%, ${withAlpha(theme.bg, 0.60)} 100%)`,
           }} />
         </div>
       )}
 
+      {/* ── Futuristic bg decorations (no background image) ── */}
+      {!resolvedImage && !showVideoEmbed && (
+        <>
+          <div style={{ position: 'absolute', inset: 0, zIndex: 1, pointerEvents: 'none',
+            backgroundImage: `radial-gradient(${withAlpha(theme.text, 0.027)} 1.5px, transparent 1.5px)`,
+            backgroundSize: '72px 72px' }} />
+          <div style={{ position: 'absolute', bottom: -200, right: -120, zIndex: 1, pointerEvents: 'none',
+            width: 800, height: 800, borderRadius: '50%',
+            background: `radial-gradient(circle, ${withAlpha(theme.accent, 0.10)} 0%, transparent 65%)` }} />
+          <div style={{ position: 'absolute', top: 180, left: 0, zIndex: 1, pointerEvents: 'none',
+            width: 600, height: 600, borderRadius: '50%',
+            background: `radial-gradient(circle, ${withAlpha(theme.accent, 0.063)} 0%, transparent 65%)` }} />
+          <div style={{ position: 'absolute', bottom: 280, right: SAFE.side - 20,
+            width: 50, height: 50, zIndex: 2, pointerEvents: 'none',
+            borderRight: `2px solid ${withAlpha(theme.accent, 0.19)}`, borderBottom: `2px solid ${withAlpha(theme.accent, 0.19)}` }} />
+        </>
+      )}
       {/* ── Logo header — INSIDE IG safe zone ── */}
       <div style={{
         position: 'absolute', top: SAFE.top + 20, left: SAFE.side, right: SAFE.side,
         display: 'flex', alignItems: 'center', gap: 16, zIndex: 20,
       }}>
-        <img src={imageCache.favicon} alt="" style={{ width: 56, height: 56, objectFit: 'contain', borderRadius: 999 }} />
+        <img src={imageCache.favicon} alt="" style={{ width: 56, height: 56, objectFit: 'contain' }} />
         <img src={logoSrc} alt="" style={{ height: 42, width: 'auto', objectFit: 'contain' }} />
-        {/* Frame counter pill */}
-        <div style={{
-          marginLeft: 'auto',
-          backgroundColor: badgeBg,
-          borderRadius: 9999, padding: '10px 24px',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          backdropFilter: 'blur(8px)',
-        }}>
-          <span style={{ fontSize: 28, fontWeight: 700, lineHeight: 1, letterSpacing: '-0.01em' }}>
-            {index + 1} / {totalFrames}
-          </span>
-        </div>
       </div>
 
       {/* ── HOOK Frame ── */}
@@ -175,14 +195,15 @@ export default function StoryCanvas({ frame, index, totalFrames, theme, imageCac
           {/* Large icon badge */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 24, marginBottom: 48 }}>
             <div style={{
-              width: 96, height: 96, borderRadius: 28,
+              width: 96, height: 96, borderRadius: 26,
               backgroundColor: theme.accentBg, color: theme.accentText,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              boxShadow: `0 8px 32px ${theme.accentBg}50`,
+              boxShadow: `0 8px 32px ${withAlpha(theme.accentBg, 0.33)}, 0 0 0 1px ${withAlpha(theme.accentBg, 0.25)}`,
             }}>
               {resolveIcon(frame.icon || 'flame', 48)}
             </div>
-            <div style={{ flex: 1, height: 4, borderRadius: 9999, backgroundColor: theme.accent, opacity: 0.4 }} />
+            <div style={{ flex: 1, height: 4, borderRadius: 9999, backgroundColor: theme.accent,
+              boxShadow: `0 0 14px ${withAlpha(theme.accent, 0.50)}`, opacity: 0.75 }} />
           </div>
           <h1 style={{
             fontFamily: headingFont,
@@ -205,15 +226,16 @@ export default function StoryCanvas({ frame, index, totalFrames, theme, imageCac
               {frame.subtext}
             </span>
           )}
-          {/* Swipe hint — editable, hidden when empty */}
-          {(frame.swipeHint ?? 'Swipe for more') && (
+          {/* Swipe hint — editable, hidden when explicitly set to empty string */}
+          {frame.swipeHint !== '' && (
             <div style={{
               position: 'absolute', bottom: SAFE.bottom + 24, left: SAFE.side, right: SAFE.side,
               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
-              color: theme.muted, fontSize: 28, fontWeight: 500, opacity: 0.45,
+              color: theme.text, fontSize: 28, fontWeight: 500, opacity: 0.35,
+              letterSpacing: '0.02em',
             }}>
-              <ArrowRight size={24} />
-              <span>{frame.swipeHint ?? 'Swipe for more'}</span>
+              <ArrowRight size={22} />
+              <span>{frame.swipeHint || 'Swipe for more'}</span>
             </div>
           )}
         </div>
@@ -230,7 +252,7 @@ export default function StoryCanvas({ frame, index, totalFrames, theme, imageCac
           {/* Icon */}
           <div style={{
             width: 80, height: 80, borderRadius: 24,
-            backgroundColor: `${theme.accent}18`, color: theme.accent,
+            backgroundColor: withAlpha(theme.accent, 0.10), color: theme.accent,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             marginBottom: 40,
           }}>
@@ -245,14 +267,27 @@ export default function StoryCanvas({ frame, index, totalFrames, theme, imageCac
             {frame.headline}
           </h2>
           {/* Accent divider */}
-          <div style={{ width: 72, height: 4, borderRadius: 9999, backgroundColor: theme.accent, marginBottom: 40, opacity: 0.5 }} />
-          <p style={{
-            fontSize: 42, fontWeight: 400, lineHeight: 1.5,
-            color: theme.muted, margin: 0, marginBottom: 56,
-            whiteSpace: 'pre-wrap',
-          }}>
-            {frame.subtext}
-          </p>
+          <div style={{ width: 56, height: 4, borderRadius: 9999, backgroundColor: theme.accent,
+            boxShadow: `0 0 14px ${withAlpha(theme.accent, 0.50)}`, marginBottom: 40 }} />
+          {frame.bullets && frame.bullets.length > 0 ? (
+            <div style={{ marginBottom: 44 }}>
+              {frame.bullets.slice(0, 4).map((b, i) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 20, marginBottom: 22 }}>
+                  <div style={{ width: 10, height: 10, borderRadius: '50%', backgroundColor: theme.accent,
+                    boxShadow: `0 0 8px ${withAlpha(theme.accent, 0.50)}`, flexShrink: 0, marginTop: 17 }} />
+                  <span style={{ fontSize: 38, fontWeight: 400, lineHeight: 1.45, color: theme.text, opacity: 0.85 }}>{b}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p style={{
+              fontSize: 42, fontWeight: 400, lineHeight: 1.5,
+              color: theme.text, opacity: 0.85, margin: 0, marginBottom: 56,
+              whiteSpace: 'pre-wrap',
+            }}>
+              {frame.subtext}
+            </p>
+          )}
           {frame.ctaLabel && (
             <div style={{
               display: 'flex', alignItems: 'center', gap: 16,
@@ -276,8 +311,8 @@ export default function StoryCanvas({ frame, index, totalFrames, theme, imageCac
         }}>
           {/* Poll icon */}
           <div style={{
-            width: 80, height: 80, borderRadius: 9999,
-            backgroundColor: `${theme.accent}20`, color: theme.accent,
+            width: 80, height: 80, borderRadius: 24,
+            backgroundColor: withAlpha(theme.accent, 0.10), color: theme.accent,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             alignSelf: 'center', marginBottom: 44,
           }}>
@@ -294,20 +329,20 @@ export default function StoryCanvas({ frame, index, totalFrames, theme, imageCac
           </h2>
           {/* Poll sticker */}
           <div style={{
-            backgroundColor: `${theme.text}08`,
+            backgroundColor: withAlpha(theme.text, 0.031),
             borderRadius: 28, padding: '20px',
-            border: `2px solid ${theme.text}12`,
+            border: `2px solid ${withAlpha(theme.text, 0.071)}`,
             backdropFilter: 'blur(16px)',
           }}>
             {pollOptions.map((opt, i) => (
               <div key={i} style={{
-                backgroundColor: i === 0 ? theme.accentBg : `${theme.text}0A`,
+                backgroundColor: i === 0 ? theme.accentBg : withAlpha(theme.text, 0.039),
                 color: i === 0 ? theme.accentText : theme.text,
                 borderRadius: 20, padding: '34px 44px',
                 fontSize: 38, fontWeight: 700, textAlign: 'center',
                 marginBottom: i < pollOptions.length - 1 ? 16 : 0,
                 letterSpacing: '0.01em',
-                boxShadow: i === 0 ? `0 4px 16px ${theme.accentBg}30` : 'none',
+                boxShadow: i === 0 ? `0 4px 16px ${withAlpha(theme.accentBg, 0.19)}` : 'none',
               }}>
                 {opt}
               </div>
@@ -325,47 +360,58 @@ export default function StoryCanvas({ frame, index, totalFrames, theme, imageCac
           padding: `${CONTENT_TOP}px ${SAFE.side}px ${SAFE.bottom + 60}px`,
           height: '100%', boxSizing: 'border-box',
         }}>
-          {/* Large icon */}
+          {/* Accent glow bar */}
           <div style={{
-            width: 120, height: 120, borderRadius: 32,
-            backgroundColor: theme.accentBg, color: theme.accentText,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            marginBottom: 44,
-            boxShadow: `0 12px 48px ${theme.accentBg}45`,
+            width: 80, height: 5, borderRadius: 9999,
+            backgroundColor: theme.accent,
+            boxShadow: `0 0 18px ${withAlpha(theme.accent, 0.50)}`,
+            marginBottom: 40,
+          }} />
+          {/* Compact label badge — outline style with icon */}
+          <div style={{
+            display: 'inline-flex', alignItems: 'center', gap: 14,
+            border: `1.5px solid ${withAlpha(theme.accent, 0.31)}`,
+            borderRadius: 9999, padding: '14px 32px',
+            marginBottom: 52,
+            backgroundColor: withAlpha(theme.accent, 0.071),
           }}>
-            {resolveIcon(frame.icon || 'megaphone', 56)}
-          </div>
-          <h2 style={{
-            fontFamily: headingFont,
-            fontSize: 92, fontWeight: 800, lineHeight: 1.05,
-            margin: 0, marginBottom: 28,
-            textTransform: 'uppercase', letterSpacing: '-0.02em',
-          }}>
-            {frame.headline}
-          </h2>
-          {frame.subtext && (
-            <p style={{
-              fontSize: 42, fontWeight: 400, lineHeight: 1.4,
-              color: theme.muted, margin: 0, marginBottom: 56,
-              maxWidth: 860,
+            {resolveIcon(frame.icon || 'megaphone', 28, { color: theme.accent, opacity: 0.9 })}
+            <span style={{
+              fontFamily: headingFont,
+              fontSize: 30, fontWeight: 700, lineHeight: 1,
+              textTransform: 'uppercase', letterSpacing: '0.08em',
+              color: theme.accent,
             }}>
-              {frame.subtext}
-            </p>
+              {frame.headline}
+            </span>
+          </div>
+          {/* Article title — hero text, adaptive size */}
+          {frame.subtext && (
+              <h2 style={{
+                fontFamily: headingFont,
+                fontSize: getCtaHeroFontSize(frame.subtext),
+                fontWeight: 800, lineHeight: 1.1,
+                margin: 0, marginBottom: 60,
+                letterSpacing: '-0.02em',
+                maxWidth: 940,
+              }}>
+                {frame.subtext}
+              </h2>
           )}
           {frame.ctaLabel && (
             <div style={{
               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16,
               backgroundColor: theme.accentBg, color: theme.accentText,
-              borderRadius: 9999, padding: '24px 56px',
+              borderRadius: 9999, padding: '26px 60px',
               fontSize: 34, fontWeight: 700,
-              boxShadow: `0 6px 28px ${theme.accentBg}45`,
+              boxShadow: `0 6px 28px ${withAlpha(theme.accentBg, 0.27)}`,
               letterSpacing: '0.02em',
             }}>
               {resolveIcon(frame.ctaIcon || 'chevronUp', 28)}
               <span>{frame.ctaLabel}</span>
             </div>
           )}
-          {/* Domain — editable */}
+          {/* Domain */}
           {(frame.domain || CONFIG.brand.domain) && (
             <div style={{
               marginTop: 48,
@@ -378,10 +424,95 @@ export default function StoryCanvas({ frame, index, totalFrames, theme, imageCac
         </div>
       )}
 
+      {/* ── TIP Frame ── */}
+      {frame.type === 'tip' && (
+        <div style={{
+          position: 'relative', zIndex: 10,
+          display: 'flex', flexDirection: 'column', justifyContent: 'center',
+          padding: `${CONTENT_TOP}px ${SAFE.side}px ${SAFE.bottom + 60}px`,
+          height: '100%', boxSizing: 'border-box',
+        }}>
+          {/* Icon + label row */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 20, marginBottom: 40 }}>
+            <div style={{
+              width: 80, height: 80, borderRadius: 24,
+              backgroundColor: withAlpha(theme.accent, 0.10), color: theme.accent,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              flexShrink: 0,
+            }}>
+              {resolveIcon(frame.icon || 'lightbulb', 40)}
+            </div>
+            <span style={{ fontFamily: headingFont, fontSize: 28, fontWeight: 700,
+              letterSpacing: '0.18em', textTransform: 'uppercase', color: theme.accent, opacity: 0.9 }}>
+              {frame.tipLabel || 'Pro Tip'}
+            </span>
+          </div>
+          <h2 style={{
+            fontFamily: headingFont, fontSize: getStoryFontSize((frame.headline || '').length * 1.2),
+            fontWeight: 800, lineHeight: 1.08, margin: 0, marginBottom: 40,
+            letterSpacing: '-0.01em',
+          }}>
+            {frame.headline}
+          </h2>
+          <div style={{ width: 56, height: 4, borderRadius: 9999, backgroundColor: theme.accent,
+            boxShadow: `0 0 14px ${withAlpha(theme.accent, 0.50)}`, marginBottom: 40 }} />
+          {frame.subtext && (
+            <div style={{
+              backgroundColor: withAlpha(theme.accent, 0.071),
+              borderLeft: `5px solid ${theme.accent}`,
+              boxShadow: `-2px 0 18px ${withAlpha(theme.accent, 0.19)}`,
+              borderRadius: '0 16px 16px 0',
+              padding: '32px 40px',
+            }}>
+              <p style={{ fontSize: 40, fontWeight: 400, lineHeight: 1.5,
+                color: theme.text, opacity: 0.88, margin: 0, whiteSpace: 'pre-wrap' }}>
+                {frame.subtext}
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── QUOTE Frame ── */}
+      {frame.type === 'quote' && (
+        <div style={{
+          position: 'relative', zIndex: 10,
+          display: 'flex', flexDirection: 'column', justifyContent: 'center',
+          padding: `${CONTENT_TOP}px ${SAFE.side}px ${SAFE.bottom + 60}px`,
+          height: '100%', boxSizing: 'border-box',
+        }}>
+          {/* Large quotation mark */}
+          <div style={{ fontSize: 200, lineHeight: 0.7, color: theme.accent, opacity: 0.3,
+            fontFamily: 'Georgia, "Times New Roman", serif', fontWeight: 900, marginBottom: 20, userSelect: 'none' }}>
+            “
+          </div>
+          <blockquote style={{
+            fontFamily: headingFont,
+            fontSize: getStoryFontSize(((frame.headline || '').length) * 1.3),
+            fontWeight: 700, lineHeight: 1.15,
+            margin: 0, marginBottom: 48,
+            letterSpacing: '-0.01em', fontStyle: 'italic',
+            whiteSpace: 'pre-wrap',
+          }}>
+            {frame.headline}
+          </blockquote>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
+            <div style={{ width: 56, height: 4, borderRadius: 9999, backgroundColor: theme.accent,
+              boxShadow: `0 0 14px ${withAlpha(theme.accent, 0.50)}` }} />
+            {frame.subtext && (
+              <span style={{ fontSize: 34, fontWeight: 600, color: theme.accent, opacity: 0.85,
+                letterSpacing: '0.04em' }}>
+                {frame.subtext}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* ── Bottom safe zone fade ── */}
       <div style={{
         position: 'absolute', bottom: 0, left: 0, right: 0, height: SAFE.bottom,
-        background: `linear-gradient(to top, ${theme.bg} 40%, transparent 100%)`,
+        background: `linear-gradient(to top, ${theme.bg} 30%, ${withAlpha(theme.bg, 0.80)} 55%, transparent 100%)`,
         pointerEvents: 'none', zIndex: 15,
       }} />
     </div>

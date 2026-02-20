@@ -19,6 +19,8 @@ export default function ExportDropdown({
   onExportPodcast,
   onExportPodcastThumbnail,
   hasPodcastAudio,
+  slideCount = 0,
+  storyCount = 0,
   onClose,
 }) {
   const isStoryTab = editorTab === 'stories';
@@ -51,7 +53,7 @@ export default function ExportDropdown({
         </button>
         <button onClick={fire(onExportAllStoriesZip)} className="w-full px-4 py-3 text-left text-xs hover:bg-white/[0.06] transition-colors flex items-center gap-2.5 border-t border-white/[0.06]">
           <Package size={14} className="text-white/40" />
-          <div><div className="font-medium text-white/80">All Stories (ZIP)</div><div className="text-white/30 text-[10px]">Bundle as .zip archive</div></div>
+          <div><div className="font-medium text-white/80">All Stories (ZIP){storyCount > 0 ? ` · ${storyCount}` : ''}</div><div className="text-white/30 text-[10px]">Bundle as .zip archive</div></div>
         </button>
       </div>
     );
@@ -70,11 +72,11 @@ export default function ExportDropdown({
       </button>
       <button onClick={fire(onExportAllZip)} className="w-full px-4 py-3 text-left text-xs hover:bg-white/[0.06] transition-colors flex items-center gap-2.5 border-t border-white/[0.06]">
         <Package size={14} className="text-white/40" />
-        <div><div className="font-medium text-white/80">All Slides (ZIP)</div><div className="text-white/30 text-[10px]">Bundle as .zip archive</div></div>
+        <div><div className="font-medium text-white/80">All Slides (ZIP){slideCount > 0 ? ` · ${slideCount}` : ''}</div><div className="text-white/30 text-[10px]">Bundle as .zip archive</div></div>
       </button>
       <button onClick={fire(onExportAllPngs)} className="w-full px-4 py-3 text-left text-xs hover:bg-white/[0.06] transition-colors flex items-center gap-2.5 border-t border-white/[0.06]">
         <Download size={14} className="text-white/40" />
-        <div><div className="font-medium text-white/80">All Slides (PNGs)</div><div className="text-white/30 text-[10px]">Individual file downloads</div></div>
+        <div><div className="font-medium text-white/80">All Slides (PNGs){slideCount > 0 ? ` · ${slideCount}` : ''}</div><div className="text-white/30 text-[10px]">Individual file downloads</div></div>
       </button>
       {isVideoSlide && (
         <button onClick={fire(onExportVideo)} className="w-full px-4 py-3 text-left text-xs hover:bg-white/[0.06] transition-colors flex items-center gap-2.5 border-t border-white/[0.06]">

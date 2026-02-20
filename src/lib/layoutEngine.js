@@ -150,7 +150,7 @@ export const getLimitsForDensity = (density = 'balanced') => {
     const dMaxBulletsWithIntro = Math.floor((availAfterTitle - introHeight) / dBulletItemH);
     return {
       maxTitleLen: TITLE_MAX_CHARS,
-      contentCharLimit: Math.floor(CONTENT_CHAR_LIMIT * 1.15),  // ~565 chars
+      contentCharLimit: Math.floor(CONTENT_CHAR_LIMIT * 1.05),  // ~518 chars (stays within 9 body lines on square with 3-line title)
       bulletCharLimit: dBulletLimit,
       bulletIntroCharLimit: INTRO_CHAR_LIMIT,                    // unchanged
       maxBulletsNoIntro: Math.min(5, dMaxBulletsNoIntro),
@@ -176,8 +176,13 @@ export const computeLayout = (slide, isPortrait) => {
   // Per-slide font size override (delta in px, e.g. -4, 0, +4)
   const fso = slide.fontSizeOverride || 0;
 
-  // Available height after title + accent
-  const availH = usableH - titleH - ACCENT_TOTAL;
+  // Sub-heading label (H3) adds extra height before body text
+  const subHeadingLabelH = slide.subHeadingLabel
+    ? Math.round(titleFont * 0.54) * 1.2 + 18  // font * LH + marginBottom
+    : 0;
+
+  // Available height after title + accent (+ sub-heading when present)
+  const availH = usableH - titleH - ACCENT_TOTAL - subHeadingLabelH;
 
   // Body font: 38px standard, bump to 44px for short impactful text
   const bodyFont = ((isShort && !hasBoth) ? (isPortrait ? 46 : 42) : BODY_FONT) + fso;
@@ -194,7 +199,7 @@ export const computeLayout = (slide, isPortrait) => {
     ? bulletCount * (Math.ceil(BULLET_CHAR_LIMIT / charsPerLine(bulletFont, 'sans', BULLET_EFFECTIVE_W)) * bulletFont * BULLET_LH + BULLET_GAP) - BULLET_GAP
     : 0;
   const introH = hasBoth ? textHeight(contentLen, introFont, INTRO_LH) + INTRO_MB : 0;
-  const allContentH = titleH + ACCENT_TOTAL + (hasBoth ? introH + totalBulletH : totalContentH + totalBulletH);
+  const allContentH = titleH + ACCENT_TOTAL + subHeadingLabelH + (hasBoth ? introH + totalBulletH : totalContentH + totalBulletH);
   const fillRatio = allContentH / usableH;
   const verticalAlign = isPortrait && fillRatio < 0.7 ? 'center' : 'top';
 

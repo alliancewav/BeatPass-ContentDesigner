@@ -41,6 +41,14 @@
   .animate-fade-in {
     animation: fade-in 0.2s ease-out;
   }
+  .animate-accent-pulse {
+    animation: accent-pulse 2.8s ease-in-out infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .animate-accent-pulse {
+      animation: none;
+    }
+  }
   .scrollbar-none {
     scrollbar-width: none;
     -ms-overflow-style: none;
@@ -71,3 +79,9 @@
     transform: translateY(0);
   }
 }
+
+@keyframes accent-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
