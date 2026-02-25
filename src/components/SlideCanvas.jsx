@@ -14,7 +14,7 @@ const L = {
   progressBot: 40,   // progress line from bottom edge
 };
 
-export default function SlideCanvas({ slide, index, totalSlides, theme, aspectRatio, imageCache, isExport = false, overlayOnly = false, coverYouTubeId = null, coverMediaMode = 'thumbnail' }) {
+export default function SlideCanvas({ slide, index, totalSlides, theme, aspectRatio, imageCache, isExport = false, overlayOnly = false, coverYouTubeId = null, coverMediaMode = 'thumbnail', showSlideNumbers = true }) {
   if (!slide) return null;
 
   const isPortrait = aspectRatio === 'portrait';
@@ -425,7 +425,7 @@ export default function SlideCanvas({ slide, index, totalSlides, theme, aspectRa
 
       {/* ── Content Slide — TEXT (no background image) ── */}
       {slide.type === 'content' && !isImageSlide && !slide.playerLayout &&
-        renderContentBody({ slide, isPortrait, hasVideoEmbed, L, theme, headingFont })
+        renderContentBody({ slide, isPortrait, hasVideoEmbed, L, theme, headingFont, showSlideNumbers })
       }
 
       {/* ── Content Slide — IMAGE (full-bleed with text overlay) ── */}
@@ -628,7 +628,7 @@ export default function SlideCanvas({ slide, index, totalSlides, theme, aspectRa
 }
 
 // ── Content body renderer — pixel-budget-driven layout ──
-function renderContentBody({ slide, isPortrait, hasVideoEmbed, L, theme, headingFont }) {
+function renderContentBody({ slide, isPortrait, hasVideoEmbed, L, theme, headingFont, showSlideNumbers = true }) {
   const lo = computeLayout(slide, isPortrait);
   const contentLen = (slide.content || '').length;
   const bulletCount = (slide.bullets || []).length;
@@ -740,12 +740,14 @@ function renderContentBody({ slide, isPortrait, hasVideoEmbed, L, theme, heading
           boxSizing: 'border-box', height: '100%', overflow: 'hidden',
         }}>
           {/* Number watermark — bottom-left for variety */}
+          {showSlideNumbers && (
           <div style={{ position: 'absolute', bottom: isPortrait ? 140 : 100, left: L.side - 10,
             fontSize: isPortrait ? 280 : 220, fontWeight: 900, lineHeight: 1,
             color: theme.text, opacity: 0.03, userSelect: 'none', pointerEvents: 'none', zIndex: 0,
             fontFamily: headingFont }}>
             {String(slide.number || '').padStart(2, '0')}
           </div>
+          )}
           {/* Section label — right-aligned, plain text */}
           <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 10,
             marginBottom: isPortrait ? 28 : 20, position: 'relative', zIndex: 10 }}>
@@ -824,12 +826,14 @@ function renderContentBody({ slide, isPortrait, hasVideoEmbed, L, theme, heading
         padding: `${lo.padTop}px ${L.side}px ${lo.padBottom}px`,
         boxSizing: 'border-box', height: '100%', overflow: 'hidden',
       }}>
+        {showSlideNumbers && (
         <div style={{ position: 'absolute', top: isPortrait ? 220 : 160, right: L.side - 10,
           fontSize: isPortrait ? 320 : 260, fontWeight: 900, lineHeight: 1,
           color: theme.text, opacity: 0.04, userSelect: 'none', pointerEvents: 'none', zIndex: 0,
           fontFamily: headingFont }}>
           {String(slide.number || '').padStart(2, '0')}
         </div>
+        )}
         {/* Section context — accent dot + muted label */}
         {renderSectionLabel()}
         {/* On sparse slides, show a prominent section title for visual weight */}
@@ -1188,6 +1192,7 @@ function renderContentBody({ slide, isPortrait, hasVideoEmbed, L, theme, heading
       overflow: 'hidden',
     }}>
       {/* Subtle large section number watermark */}
+      {showSlideNumbers && (
       <div style={{
         position: 'absolute', top: isPortrait ? 220 : 160, right: L.side - 10,
         fontSize: isPortrait ? 320 : 260, fontWeight: 900, lineHeight: 1,
@@ -1197,6 +1202,7 @@ function renderContentBody({ slide, isPortrait, hasVideoEmbed, L, theme, heading
       }}>
         {String(slide.number || '').padStart(2, '0')}
       </div>
+      )}
 
       {/* Title */}
       <h2 style={{

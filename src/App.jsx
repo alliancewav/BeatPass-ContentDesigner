@@ -37,6 +37,7 @@ export default function App() {
   const [activeThemeId, setActiveThemeId] = useState('aspectDark');
   const [dynamicTheme, setDynamicTheme] = useState(null);
   const [aspectRatio, setAspectRatio] = useState('portrait');
+  const [showSlideNumbers, setShowSlideNumbers] = useState(true);
 
   // Cover image override (hero image swap)
   const [coverOverride, setCoverOverride] = useState(null);
@@ -828,6 +829,8 @@ export default function App() {
           dynamicTheme={dynamicTheme}
           aspectRatio={aspectRatio}
           setAspectRatio={setAspectRatio}
+          showSlideNumbers={showSlideNumbers}
+          setShowSlideNumbers={setShowSlideNumbers}
           density={density}
           article={article}
           slides={slides}
@@ -886,7 +889,7 @@ export default function App() {
                 <button onClick={() => setCurrentIndex(Math.max(0, currentIndex - 1))} disabled={currentIndex === 0} className="p-1.5 sm:p-3 bg-white/[0.06] border border-white/[0.08] rounded-full text-white/60 disabled:opacity-20 hover:bg-white/[0.1] transition-all flex-shrink-0" title="Previous slide (← Arrow)"><ArrowLeft size={16} /></button>
                 <div key={currentIndex} className="relative slide-shadow rounded-sm animate-fade-in" style={{ width: previewW * scale, height: previewH * scale }}>
                   <div className="absolute top-0 left-0 origin-top-left" style={{ width: previewW, height: previewH, transform: `scale(${scale})` }}>
-                    <SlideCanvas slide={currentSlide} index={currentIndex} totalSlides={slides.length} theme={resolvedTheme} aspectRatio={aspectRatio} imageCache={imageCache} coverYouTubeId={coverYouTubeId} coverMediaMode={coverMediaMode} />
+                    <SlideCanvas slide={currentSlide} index={currentIndex} totalSlides={slides.length} theme={resolvedTheme} aspectRatio={aspectRatio} imageCache={imageCache} coverYouTubeId={coverYouTubeId} coverMediaMode={coverMediaMode} showSlideNumbers={showSlideNumbers} />
                   </div>
                   <div className="absolute top-2 right-2 opacity-0 hover:opacity-100 transition-opacity z-20">
                     <button onClick={exportH.handleExportSingle} disabled={exportH.exporting} className="p-2 bg-black/70 text-white rounded-lg hover:bg-black backdrop-blur-sm border border-white/10" title="Download this slide"><Download size={16} /></button>
@@ -1066,6 +1069,7 @@ export default function App() {
               aspectRatio={aspectRatio}
               imageCache={imageCache}
               isExport={true}
+              showSlideNumbers={showSlideNumbers}
             />
           )}
         </div>
@@ -1090,6 +1094,7 @@ export default function App() {
               imageCache={imageCache}
               isExport={true}
               overlayOnly={true}
+              showSlideNumbers={showSlideNumbers}
             />
           )}
         </div>

@@ -28,6 +28,9 @@ export default function EditorSidebar({
   // Aspect ratio
   aspectRatio,
   setAspectRatio,
+  // Slide numbers
+  showSlideNumbers,
+  setShowSlideNumbers,
   // Density
   density,
   article,
@@ -125,6 +128,17 @@ export default function EditorSidebar({
                   <button onClick={() => setAspectRatio('square')} className={`flex-1 py-2 text-xs font-semibold rounded-md transition-all ${aspectRatio === 'square' ? 'bg-surface-200 text-fg-contrast' : 'text-fg-muted hover:text-fg-secondary'}`}>1:1</button>
                   <button onClick={() => setAspectRatio('portrait')} className={`flex-1 py-2 text-xs font-semibold rounded-md transition-all ${aspectRatio === 'portrait' ? 'bg-surface-200 text-fg-contrast' : 'text-fg-muted hover:text-fg-secondary'}`}>4:5</button>
                 </div>
+              </div>
+              {/* Slide number watermark toggle */}
+              <div className="flex items-center justify-between">
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-white/30">Slide Numbers</label>
+                <button
+                  onClick={() => setShowSlideNumbers(v => !v)}
+                  className={`relative w-9 h-5 rounded-full transition-colors duration-200 ${showSlideNumbers ? 'bg-accent/60' : 'bg-surface-100'}`}
+                  title={showSlideNumbers ? 'Hide slide number watermarks' : 'Show slide number watermarks'}
+                >
+                  <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200 ${showSlideNumbers ? 'translate-x-4' : 'translate-x-0'}`} />
+                </button>
               </div>
               {/* Density selector + Regenerate */}
               {article && (
